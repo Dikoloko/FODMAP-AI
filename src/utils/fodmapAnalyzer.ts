@@ -80,17 +80,31 @@ export function analyzeIngredients(ingredientText: string): {
   const text = ingredientText.toLowerCase();
   const flags: IngredientFlag[] = [];
 
+  // Patterns that negate the ingredient (e.g. "lactosevrije" = lactose-free)
+  const freePatterns = ['vrij', 'vrije', 'free', 'frei', 'sans', 'zonder'];
+
   for (const item of db.highFodmapIngredients) {
     const pattern = item.ingredient.toLowerCase();
-    if (text.includes(pattern)) {
-      flags.push({
-        ingredient: item.ingredient,
-        matched: pattern,
-        fodmapType: item.fodmapType,
-        commonIn: item.commonIn,
-        alternatives: alternativesMap[pattern] || [],
-      });
-    }
+    if (!text.includes(pattern)) continue;
+
+    // Check if the match is negated by a "free" prefix (e.g. "lactosevrije", "gluten-free")
+    const idx = text.indexOf(pattern);
+    const surrounding = text.slice(Math.max(0, idx - 15), idx + pattern.length + 10);
+    const isNegated = freePatterns.some(fp =>
+      surrounding.includes(pattern + fp) ||     // "lactosevrije"
+      surrounding.includes(pattern + '-' + fp) || // "lactose-free"
+      surrounding.includes(fp + ' ' + pattern) || // "sans lactose"
+      surrounding.includes('zonder ' + pattern)   // "zonder lactose"
+    );
+    if (isNegated) continue;
+
+    flags.push({
+      ingredient: item.ingredient,
+      matched: pattern,
+      fodmapType: item.fodmapType,
+      commonIn: item.commonIn,
+      alternatives: alternativesMap[pattern] || [],
+    });
   }
 
   if (flags.length === 0) return { rating: 'green', flags: [] };
