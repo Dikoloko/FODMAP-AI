@@ -1,4 +1,4 @@
-const CACHE_NAME = 'gutbuddy-v1';
+const CACHE_NAME = 'gutbuddy-v2';
 
 // Assets to cache on install
 const PRECACHE_URLS = [

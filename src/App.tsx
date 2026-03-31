@@ -1,7 +1,8 @@
-import { lazy, Suspense } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { useUser } from './hooks/useUser';
 import BottomNav from './components/BottomNav';
+import { runMigration } from './migration';
 
 const HomeScreen = lazy(() => import('./screens/HomeScreen'));
 const ScanScreen = lazy(() => import('./screens/ScanScreen'));
@@ -18,7 +19,7 @@ function Loading() {
   );
 }
 
-export default function App() {
+function AppInner() {
   const { user, setUser } = useUser();
 
   return (
@@ -38,4 +39,24 @@ export default function App() {
       </div>
     </BrowserRouter>
   );
+}
+
+export default function App() {
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    runMigration()
+      .then(() => setReady(true))
+      .catch(() => setReady(true)); // don't block the app if migration fails
+  }, []);
+
+  if (!ready) {
+    return (
+      <div className="flex min-h-dvh items-center justify-center">
+        <div className="w-8 h-8 border-3 border-primary border-t-transparent rounded-full animate-spin" />
+      </div>
+    );
+  }
+
+  return <AppInner />;
 }

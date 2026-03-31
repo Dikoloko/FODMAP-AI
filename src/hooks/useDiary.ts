@@ -1,22 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
 import type { DiaryEntry, DaySymptoms, MealType, DiaryFood, User } from '../types';
-
-function getKey(user: User, type: 'entries' | 'symptoms') {
-  return `diary_${user}_${type}`;
-}
-
-function load<T>(key: string): T[] {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
-}
-
-function save<T>(key: string, data: T[]) {
-  localStorage.setItem(key, JSON.stringify(data));
-}
+import { db } from '../db';
 
 function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -28,17 +12,16 @@ export function useDiary(user: User) {
 
   // Load data when user changes
   useEffect(() => {
-    setEntries(load<DiaryEntry>(getKey(user, 'entries')));
-    setSymptoms(load<DaySymptoms>(getKey(user, 'symptoms')));
-  }, [user]);
-
-  const persist = useCallback((newEntries: DiaryEntry[], newSymptoms?: DaySymptoms[]) => {
-    save(getKey(user, 'entries'), newEntries);
-    setEntries(newEntries);
-    if (newSymptoms !== undefined) {
-      save(getKey(user, 'symptoms'), newSymptoms);
-      setSymptoms(newSymptoms);
-    }
+    let cancelled = false;
+    Promise.all([
+      db.diaryEntries.where('user').equals(user).toArray(),
+      db.symptoms.where('user').equals(user).toArray(),
+    ]).then(([rawEntries, rawSymptoms]) => {
+      if (cancelled) return;
+      setEntries(rawEntries.map(({ user: _u, ...e }) => e as DiaryEntry));
+      setSymptoms(rawSymptoms.map(({ user: _u, ...s }) => s as DaySymptoms));
+    });
+    return () => { cancelled = true; };
   }, [user]);
 
   const addEntry = useCallback((date: string, meal: MealType, foods: DiaryFood[]) => {
@@ -49,27 +32,30 @@ export function useDiary(user: User) {
       foods,
       timestamp: new Date().toISOString(),
     };
-    const updated = [...entries, entry];
-    persist(updated);
+    setEntries(prev => [...prev, entry]);
+    db.diaryEntries.add({ ...entry, user });
     return entry;
-  }, [entries, persist]);
+  }, [user]);
 
   const removeEntry = useCallback((id: string) => {
-    const updated = entries.filter(e => e.id !== id);
-    persist(updated);
-  }, [entries, persist]);
+    setEntries(prev => prev.filter(e => e.id !== id));
+    db.diaryEntries.delete(id);
+  }, []);
 
   const removeFoodFromEntry = useCallback((entryId: string, foodIndex: number) => {
-    const entry = entries.find(e => e.id === entryId);
-    if (!entry) return;
-    const newFoods = entry.foods.filter((_, i) => i !== foodIndex);
-    if (newFoods.length === 0) {
-      // Remove entire entry if no foods left
-      persist(entries.filter(e => e.id !== entryId));
-    } else {
-      persist(entries.map(e => e.id === entryId ? { ...e, foods: newFoods } : e));
-    }
-  }, [entries, persist]);
+    setEntries(prev => {
+      const entry = prev.find(e => e.id === entryId);
+      if (!entry) return prev;
+      const newFoods = entry.foods.filter((_, i) => i !== foodIndex);
+      if (newFoods.length === 0) {
+        db.diaryEntries.delete(entryId);
+        return prev.filter(e => e.id !== entryId);
+      }
+      const updated = { ...entry, foods: newFoods };
+      db.diaryEntries.put({ ...updated, user });
+      return prev.map(e => e.id === entryId ? updated : e);
+    });
+  }, [user]);
 
   const getEntriesForDate = useCallback((date: string) => {
     return entries.filter(e => e.date === date);
@@ -88,17 +74,17 @@ export function useDiary(user: User) {
   }, [entries]);
 
   const setSymptomsForDate = useCallback((daySymptoms: DaySymptoms) => {
-    const existing = symptoms.findIndex(s => s.date === daySymptoms.date);
-    let updated: DaySymptoms[];
-    if (existing >= 0) {
-      updated = [...symptoms];
-      updated[existing] = daySymptoms;
-    } else {
-      updated = [...symptoms, daySymptoms];
-    }
-    save(getKey(user, 'symptoms'), updated);
-    setSymptoms(updated);
-  }, [symptoms, user]);
+    setSymptoms(prev => {
+      const existing = prev.findIndex(s => s.date === daySymptoms.date);
+      if (existing >= 0) {
+        const updated = [...prev];
+        updated[existing] = daySymptoms;
+        return updated;
+      }
+      return [...prev, daySymptoms];
+    });
+    db.symptoms.put({ ...daySymptoms, user });
+  }, [user]);
 
   const getSymptomsForDate = useCallback((date: string): DaySymptoms | undefined => {
     return symptoms.find(s => s.date === date);

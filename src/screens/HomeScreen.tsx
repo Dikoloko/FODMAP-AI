@@ -1,10 +1,11 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { User } from '../types';
 import UserSelector from '../components/UserSelector';
 import FoodCard from '../components/FoodCard';
 import { searchFoods } from '../utils/fodmapAnalyzer';
 import { useDiary } from '../hooks/useDiary';
+import { useDataExport } from '../hooks/useDataExport';
 
 function getGreeting(user: User): string {
   const hour = new Date().getHours();
@@ -33,6 +34,8 @@ function toDateString(date: Date) {
 export default function HomeScreen({ user, onSwitchUser }: Props) {
   const navigate = useNavigate();
   const [query, setQuery] = useState('');
+  const { exportData, importData, importing, importError, importSuccess } = useDataExport();
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const { getEntriesForDate, getSymptomsForDate, addEntry } = useDiary(user);
 
   const today = toDateString(new Date());
@@ -156,6 +159,47 @@ export default function HomeScreen({ user, onSwitchUser }: Props) {
                   </p>
                 )}
               </div>
+            )}
+          </div>
+          {/* Data backup */}
+          <div className="mt-4">
+            <div className="flex gap-2">
+              <button
+                onClick={() => exportData()}
+                className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-white rounded-xl border border-gray-100 shadow-sm text-xs text-gray-500 font-medium active:bg-gray-50"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                </svg>
+                Export data
+              </button>
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={importing}
+                className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-white rounded-xl border border-gray-100 shadow-sm text-xs text-gray-500 font-medium active:bg-gray-50 disabled:opacity-50"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5" />
+                </svg>
+                {importing ? 'Importing...' : 'Import data'}
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".json"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) importData(file);
+                  e.target.value = '';
+                }}
+              />
+            </div>
+            {importError && (
+              <p className="mt-1.5 text-xs text-fodmap-red text-center">{importError}</p>
+            )}
+            {importSuccess && (
+              <p className="mt-1.5 text-xs text-fodmap-green font-medium text-center">Data imported — reload to see changes</p>
             )}
           </div>
         </>

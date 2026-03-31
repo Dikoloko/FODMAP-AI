@@ -1,4 +1,5 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
+import { db } from '../db';
 
 export interface RecipeIngredient {
   name: string;
@@ -33,7 +34,7 @@ function parseRecipeResponse(responseText: string): Recipe {
 }
 
 export function useRecipeGenerator(user?: string) {
-  const favKey = user ? `fodmap_favorite_recipes_${user}` : 'fodmap_favorite_recipes';
+  const userKey = user ?? 'bram';
 
   const [state, setState] = useState<State>({
     loading: false,
@@ -41,14 +42,31 @@ export function useRecipeGenerator(user?: string) {
     error: null,
   });
 
-  const [favorites, setFavorites] = useState<Recipe[]>(() => {
-    try {
-      const raw = localStorage.getItem(favKey);
-      return raw ? JSON.parse(raw) : [];
-    } catch {
-      return [];
-    }
-  });
+  const [favorites, setFavorites] = useState<Recipe[]>([]);
+
+  // Load favorites from DB when user changes
+  useEffect(() => {
+    let cancelled = false;
+    db.recipeFavorites
+      .where('user')
+      .equals(userKey)
+      .toArray()
+      .then(records => {
+        if (cancelled) return;
+        setFavorites(records.map(r => ({
+          name: r.name,
+          description: r.description,
+          prepTime: r.prepTime,
+          cookTime: r.cookTime,
+          servings: r.servings,
+          ingredients: r.ingredients,
+          steps: r.steps,
+          tips: r.tips,
+          fodmapNotes: r.fodmapNotes,
+        })));
+      });
+    return () => { cancelled = true; };
+  }, [userKey]);
 
   const generate = useCallback(async (prompt: string) => {
     setState({ loading: true, recipe: null, error: null });
@@ -78,21 +96,22 @@ export function useRecipeGenerator(user?: string) {
   }, []);
 
   const saveFavorite = useCallback((recipe: Recipe) => {
-    setFavorites((prev) => {
-      if (prev.some((r) => r.name === recipe.name)) return prev;
-      const updated = [...prev, recipe];
-      localStorage.setItem(favKey, JSON.stringify(updated));
-      return updated;
+    setFavorites(prev => {
+      if (prev.some(r => r.name === recipe.name)) return prev;
+      db.recipeFavorites.add({ ...recipe, user: userKey });
+      return [...prev, recipe];
     });
-  }, []);
+  }, [userKey]);
 
   const removeFavorite = useCallback((name: string) => {
-    setFavorites((prev) => {
-      const updated = prev.filter((r) => r.name !== name);
-      localStorage.setItem(favKey, JSON.stringify(updated));
-      return updated;
+    setFavorites(prev => {
+      db.recipeFavorites
+        .where('[user+name]')
+        .equals([userKey, name])
+        .delete();
+      return prev.filter(r => r.name !== name);
     });
-  }, []);
+  }, [userKey]);
 
   const reset = useCallback(() => {
     setState({ loading: false, recipe: null, error: null });
