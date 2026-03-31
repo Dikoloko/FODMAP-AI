@@ -185,7 +185,7 @@ function SymptomTracker({ date, user }: { date: string; user: User }) {
   const [otherSymptoms, setOtherSymptoms] = useState(existing?.otherSymptoms ?? '');
   const [saved, setSaved] = useState(false);
   const [showMore, setShowMore] = useState(false);
-  const saveTimer = useRef<ReturnType<typeof setTimeout>>();
+  const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   // Reset state when date changes
   useEffect(() => {

@@ -17,20 +17,6 @@ export function isGoodDay(s: DaySymptoms): boolean {
   return s.overallFeeling === 'good' && symptomScore(s) < 0.15;
 }
 
-// Get all unique food names eaten on a date (and optionally the day before for delayed reactions)
-function getFoodsForDate(entries: DiaryEntry[], date: string): string[] {
-  return [...new Set(
-    entries
-      .filter(e => e.date === date)
-      .flatMap(e => e.foods.map(f => f.name.toLowerCase()))
-  )];
-}
-
-function getPrevDate(date: string): string {
-  const d = new Date(date + 'T00:00:00');
-  d.setDate(d.getDate() - 1);
-  return d.toISOString().split('T')[0];
-}
 
 export interface FoodCorrelation {
   food: string;
