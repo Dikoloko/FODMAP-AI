@@ -93,8 +93,12 @@ const alternativesMap: Record<string, string[]> = {
   'poudre de lait': ['poudre de lait sans lactose'],
   wei: ['wei-isolaat'],
   honey: ['maple syrup', 'table sugar'],
+  honing: ['ahornsiroop', 'tafelsuiker'],
+  miel: ['sirop d\'érable', 'sucre de table'],
   agave: ['maple syrup', 'table sugar'],
   'agave syrup': ['maple syrup', 'table sugar'],
+  agavesiroop: ['ahornsiroop', 'tafelsuiker'],
+  'sirop d\'agave': ['sirop d\'érable', 'sucre de table'],
   fructose: ['table sugar (sucrose)', 'maple syrup', 'stevia'],
   'high fructose corn syrup': ['table sugar', 'maple syrup'],
   'glucose-fructose syrup': ['glucose syrup', 'table sugar'],
@@ -137,42 +141,70 @@ function normalize(s: string): string {
   return s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 }
 
+// Check if a text segment contains a "free from" negation for a given FODMAP type
+function segmentIsNegated(segment: string, fodmapType: string): boolean {
+  const freePatterns = ['vrij', 'vrije', 'free', 'frei', 'sans', 'zonder'];
+
+  // Direct negation: "lactosevrije", "gluten-free", "sans lactose", etc.
+  const hasFreeSuffix = freePatterns.some(fp => segment.includes(fp));
+  if (!hasFreeSuffix) return false;
+
+  // Check if the "free" pattern relates to this FODMAP type
+  // e.g. "lactosevrije" negates lactose items; "glutenvrij" negates fructans (wheat)
+  const negationMap: Record<string, string[]> = {
+    lactose: ['lactose', 'melk', 'milk', 'lait', 'zuivel', 'dairy'],
+    fructans: ['gluten', 'tarwe', 'wheat', 'ble'],
+    polyols: ['suiker', 'sugar', 'sucre'],
+  };
+
+  const relevantTerms = negationMap[fodmapType] || [];
+  // If ANY relevant term + free pattern combo exists in this segment, it's negated
+  for (const term of relevantTerms) {
+    for (const fp of freePatterns) {
+      if (segment.includes(term + fp) || segment.includes(term + '-' + fp) ||
+          segment.includes(fp + ' ' + term) || segment.includes('zonder ' + term) ||
+          segment.includes('sans ' + term) || segment.includes('no ' + term) ||
+          segment.includes('0% ' + term)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 export function analyzeIngredients(ingredientText: string): {
   rating: FodmapRating;
   flags: IngredientFlag[];
 } {
-  // Normalize: lowercase + strip accents + clean up percentages/brackets
   const text = normalize(ingredientText);
   const flags: IngredientFlag[] = [];
-  const seen = new Set<string>(); // Prevent duplicate flags for same FODMAP type
+  const seen = new Set<string>();
 
-  // Patterns that negate the ingredient (e.g. "lactosevrije" = lactose-free)
-  const freePatterns = ['vrij', 'vrije', 'free', 'frei', 'sans', 'zonder'];
+  // Pre-process: replace commas inside parentheses with a placeholder
+  // so "glutenvrij meel (rijst, maïs)" stays as one segment
+  const preprocessed = text.replace(/\([^)]*\)/g, match => match.replace(/,/g, '\u00B7'));
+
+  // Split by comma (but not decimal commas like "1,8%") or semicolon
+  const segments = preprocessed.split(/,(?!\d)|;/).map(s => s.trim().replace(/\u00B7/g, ','));
 
   for (const item of db.highFodmapIngredients) {
     const pattern = normalize(item.ingredient);
     if (!text.includes(pattern)) continue;
 
-    // Check if the match is negated by a "free" prefix/suffix
-    const idx = text.indexOf(pattern);
-    const surrounding = text.slice(Math.max(0, idx - 20), idx + pattern.length + 15);
-    const isNegated = freePatterns.some(fp =>
-      surrounding.includes(pattern + fp) ||       // "lactosevrije"
-      surrounding.includes(pattern + '-' + fp) || // "lactose-free"
-      surrounding.includes(fp + ' ' + pattern) || // "sans lactose"
-      surrounding.includes('zonder ' + pattern) || // "zonder lactose"
-      surrounding.includes('no ' + pattern) ||     // "no milk"
-      surrounding.includes('0% ' + pattern)        // "0% lactose"
-    );
-    if (isNegated) continue;
+    // Find which segment contains this ingredient
+    const segment = segments.find(s => s.includes(pattern));
+    if (!segment) continue;
 
-    // Verify it's a real word boundary, not a substring of another word
-    // e.g. "lait" should not match in "laitue" (lettuce)
-    const before = idx > 0 ? text[idx - 1] : ' ';
-    const wordBoundary = /[\s,;:()\/\-.]|^$/;
+    // Check if this segment negates the FODMAP type (e.g. "lactosevrije magere kwark")
+    if (segmentIsNegated(segment, item.fodmapType)) continue;
+
+    // Verify word boundary (prevent "lait" matching in "laitue")
+    const idx = segment.indexOf(pattern);
+    const before = idx > 0 ? segment[idx - 1] : ' ';
+    const wordBoundary = /[\s,;:()\/\-.*]|^$/;
     if (!wordBoundary.test(before)) continue;
 
-    // Skip if we already have a flag for the same ingredient name (different language variant)
+    // Skip duplicate ingredient names (language variants)
     if (seen.has(item.ingredient.toLowerCase())) continue;
     seen.add(item.ingredient.toLowerCase());
 
