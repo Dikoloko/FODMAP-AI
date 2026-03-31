@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Html5Qrcode } from 'html5-qrcode';
-import type { User, FodmapRating } from '../types';
+import type { User, FodmapRating, FodmapFood } from '../types';
 import { useOpenFoodFacts } from '../hooks/useOpenFoodFacts';
 import { useDiary } from '../hooks/useDiary';
 import { analyzeIngredients, searchFoods } from '../utils/fodmapAnalyzer';
