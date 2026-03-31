@@ -90,9 +90,8 @@ export default async function handler(req: Request) {
     });
 
     if (!response.ok) {
-      const errorText = await response.text();
       return new Response(
-        JSON.stringify({ error: `Claude API error: ${response.status}`, details: errorText }),
+        JSON.stringify({ error: `Analysis failed (${response.status})` }),
         { status: response.status, headers: { 'Content-Type': 'application/json' } }
       );
     }
@@ -103,7 +102,7 @@ export default async function handler(req: Request) {
     });
   } catch (err) {
     return new Response(
-      JSON.stringify({ error: 'Internal server error', details: String(err) }),
+      JSON.stringify({ error: 'Internal server error' }),
       { status: 500, headers: { 'Content-Type': 'application/json' } }
     );
   }

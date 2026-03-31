@@ -5,12 +5,14 @@ const STORAGE_KEY = 'fodmap_current_user';
 
 export function useUser() {
   const [user, setUser] = useState<User>(() => {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    return (stored === 'bram' || stored === 'helena') ? stored : 'bram';
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      return (stored === 'bram' || stored === 'helena') ? stored : 'bram';
+    } catch { return 'bram'; }
   });
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, user);
+    try { localStorage.setItem(STORAGE_KEY, user); } catch { /* quota exceeded */ }
   }, [user]);
 
   return { user, setUser };

@@ -113,12 +113,13 @@ function AddFoodForm({ onAdd, onCancel }: { onAdd: (food: DiaryFood) => void; on
             ))}
           </div>
           <button
-            onClick={() => onAdd({
-              name: customName || query,
-              rating: customRating,
-              fodmapTypes: [],
-            })}
-            className="w-full py-2 bg-primary text-white text-sm font-medium rounded-lg active:scale-[0.98]"
+            onClick={() => {
+              const name = (customName || query).trim();
+              if (!name) return;
+              onAdd({ name, rating: customRating, fodmapTypes: [] });
+            }}
+            disabled={!(customName || query).trim()}
+            className="w-full py-2 bg-primary text-white text-sm font-medium rounded-lg active:scale-[0.98] disabled:opacity-40"
           >
             Add "{customName || query}"
           </button>
@@ -464,15 +465,18 @@ export default function DiaryScreen({ user }: Props) {
 
   // Handle food deletion with undo
   const handleRemoveFood = (entryId: string, foodIndex: number, foodName: string) => {
-    // Store current entries for undo
-    const snapshot = diary.entries.slice();
+    // Capture the food and entry info before deletion for undo
+    const entry = diary.entries.find(e => e.id === entryId);
+    if (!entry) return;
+    const removedFood = entry.foods[foodIndex];
+    const entryMeal = entry.meal;
+    const entryDate = entry.date;
+
     removeFoodFromEntry(entryId, foodIndex);
     setUndoAction({
       message: `Removed "${foodName}"`,
       restore: () => {
-        // Restore from snapshot by re-persisting
-        localStorage.setItem(`diary_${user}_entries`, JSON.stringify(snapshot));
-        window.location.reload(); // Simple but effective restore
+        addEntry(entryDate, entryMeal, [removedFood]);
       },
     });
   };
