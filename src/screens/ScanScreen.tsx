@@ -10,9 +10,71 @@ import FoodCard from '../components/FoodCard';
 type ScanState = 'idle' | 'scanning' | 'result';
 
 function ProductNameFallback({ productName }: { productName: string }) {
-  const words = productName.toLowerCase().split(/[\s,\-\/]+/).filter(w => w.length > 2);
-  const matches = words.flatMap(w => searchFoods(w));
-  const unique = [...new Map(matches.map(f => [f.name, f])).values()];
+  // Try to find the best match for the product as a whole
+  // First: search the full name, then try progressively shorter terms
+  const name = productName.toLowerCase();
+
+  // Common product name mappings (FR/NL → search term)
+  const productKeywords: Record<string, string> = {
+    'oeuf': 'egg', 'oeufs': 'egg', 'ei': 'egg', 'eieren': 'egg',
+    'lait': 'milk', 'melk': 'milk',
+    'beurre': 'butter', 'boter': 'butter',
+    'fromage': 'cheese', 'kaas': 'cheese',
+    'pain': 'bread', 'brood': 'bread',
+    'poulet': 'chicken', 'kip': 'chicken',
+    'porc': 'pork', 'varken': 'pork',
+    'boeuf': 'beef', 'rund': 'beef',
+    'riz': 'rice', 'rijst': 'rice',
+    'pomme': 'apple', 'appel': 'apple',
+    'banane': 'banana', 'banaan': 'banana',
+    'tomate': 'tomato', 'tomaat': 'tomato',
+    'carotte': 'carrot', 'wortel': 'carrot',
+    'yaourt': 'yogurt', 'yoghurt': 'yogurt',
+    'crème': 'cream', 'room': 'cream',
+    'saumon': 'salmon', 'zalm': 'salmon',
+    'thon': 'tuna', 'tonijn': 'tuna',
+    'pâtes': 'pasta', 'pasta': 'pasta',
+    'chocolat': 'chocolate', 'chocolade': 'chocolate',
+    'miel': 'honey', 'honing': 'honey',
+    'oignon': 'onion', 'ui': 'onion',
+    'ail': 'garlic', 'knoflook': 'garlic',
+    'champignon': 'mushroom', 'paddenstoel': 'mushroom',
+    'avocat': 'avocado', 'avocado': 'avocado',
+  };
+
+  // 1. Try keyword mapping first
+  const words = name.split(/[\s,\-\/()]+/).filter(w => w.length > 1);
+  let bestMatches: FodmapFood[] = [];
+
+  for (const word of words) {
+    const mapped = productKeywords[word];
+    if (mapped) {
+      const results = searchFoods(mapped);
+      if (results.length > 0) {
+        bestMatches = results;
+        break;
+      }
+    }
+  }
+
+  // 2. If no keyword match, try searching each word (longest first, skip short/common words)
+  if (bestMatches.length === 0) {
+    const skipWords = new Set(['de', 'du', 'des', 'la', 'le', 'les', 'au', 'aux', 'en', 'un', 'une', 'van', 'het', 'een', 'met', 'voor', 'sur', 'par', 'sol', 'bio', 'élevées', 'élevés', 'free', 'range', 'poules', 'hens']);
+    const searchableWords = words
+      .filter(w => w.length > 2 && !skipWords.has(w))
+      .sort((a, b) => b.length - a.length);
+
+    for (const word of searchableWords) {
+      const results = searchFoods(word);
+      if (results.length > 0) {
+        bestMatches = results;
+        break;
+      }
+    }
+  }
+
+  // 3. Deduplicate and show best match
+  const unique = [...new Map(bestMatches.map(f => [f.name, f])).values()];
 
   if (unique.length > 0) {
     return (
@@ -21,7 +83,7 @@ function ProductNameFallback({ productName }: { productName: string }) {
           No ingredient list available. Based on the product name, here's what we found:
         </p>
         <div className="flex flex-col gap-2">
-          {unique.slice(0, 3).map((food) => (
+          {unique.slice(0, 2).map((food) => (
             <FoodCard key={food.name} food={food} />
           ))}
         </div>
