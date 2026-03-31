@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Html5Qrcode } from 'html5-qrcode';
+import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import type { User, FodmapRating, FodmapFood } from '../types';
 import { useOpenFoodFacts } from '../hooks/useOpenFoodFacts';
 import { useDiary } from '../hooks/useDiary';
@@ -198,15 +198,33 @@ export default function ScanScreen({ user }: Props) {
     await new Promise((r) => setTimeout(r, 100));
 
     try {
-      const scanner = new Html5Qrcode(scannerContainerId);
+      const scanner = new Html5Qrcode(scannerContainerId, {
+        // Only scan barcode formats (skip QR — faster detection)
+        formatsToSupport: [
+          Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.EAN_8,
+          Html5QrcodeSupportedFormats.UPC_A,
+          Html5QrcodeSupportedFormats.UPC_E,
+          Html5QrcodeSupportedFormats.CODE_128,
+          Html5QrcodeSupportedFormats.CODE_39,
+          Html5QrcodeSupportedFormats.ITF,
+        ],
+        verbose: false,
+      });
       scannerRef.current = scanner;
+
+      // Use full viewport width for scan area
+      const containerWidth = Math.min(window.innerWidth - 32, 500);
+      const scanWidth = Math.round(containerWidth * 0.85);
+      const scanHeight = Math.round(scanWidth * 0.4);
 
       await scanner.start(
         { facingMode: 'environment' },
         {
-          fps: 10,
-          qrbox: { width: 250, height: 150 },
-          aspectRatio: 1.0,
+          fps: 15,
+          qrbox: { width: scanWidth, height: scanHeight },
+          aspectRatio: 1.5,
+          disableFlip: false,
         },
         (decodedText) => {
           handleBarcode(decodedText);
@@ -285,7 +303,8 @@ export default function ScanScreen({ user }: Props) {
 
       {scanState === 'scanning' && (
         <div className="mb-4">
-          <div id={scannerContainerId} className="rounded-xl overflow-hidden mb-3" />
+          <div id={scannerContainerId} className="rounded-xl overflow-hidden mb-3" style={{ minHeight: '280px' }} />
+          <p className="text-xs text-gray-400 text-center mb-2">Hold steady — keep barcode inside the box</p>
           <button
             onClick={async () => { await stopScanner(); setScanState('idle'); }}
             className="w-full py-2.5 text-sm text-gray-600 bg-gray-100 rounded-xl"
