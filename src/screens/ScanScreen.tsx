@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
+import type { Html5Qrcode as Html5QrcodeType } from 'html5-qrcode';
 import type { User, FodmapRating, FodmapFood } from '../types';
 import { useOpenFoodFacts } from '../hooks/useOpenFoodFacts';
 import { useDiary } from '../hooks/useDiary';
@@ -101,12 +101,11 @@ function ProductNameFallback({ productName }: { productName: string }) {
 }
 
 // Quick log button for scan results
-function LogToDiaryButton({ productName, rating, user }: {
+function LogToDiaryButton({ productName, rating, addEntry }: {
   productName: string;
   rating: FodmapRating;
-  user: User;
+  addEntry: (date: string, meal: 'breakfast' | 'lunch' | 'dinner' | 'snack', foods: { name: string; rating: FodmapRating; fodmapTypes: string[] }[]) => void;
 }) {
-  const { addEntry } = useDiary(user);
   const [logged, setLogged] = useState(false);
   const [meal, setMeal] = useState<'breakfast' | 'lunch' | 'dinner' | 'snack' | null>(null);
 
@@ -165,10 +164,11 @@ export default function ScanScreen({ user }: Props) {
   const [manualBarcode, setManualBarcode] = useState('');
   const [scannedBarcode, setScannedBarcode] = useState('');
   const [cameraError, setCameraError] = useState<string | null>(null);
-  const scannerRef = useRef<Html5Qrcode | null>(null);
+  const scannerRef = useRef<Html5QrcodeType | null>(null);
   const scannerContainerId = 'barcode-scanner';
 
   const { loading, product, error, notFound, lookup, reset } = useOpenFoodFacts();
+  const { addEntry } = useDiary(user);
 
   const stopScanner = useCallback(async () => {
     if (scannerRef.current) {
@@ -198,6 +198,9 @@ export default function ScanScreen({ user }: Props) {
     await new Promise((r) => setTimeout(r, 100));
 
     try {
+      // Dynamic import — html5-qrcode (~200KB) only loads when user taps scan
+      const { Html5Qrcode, Html5QrcodeSupportedFormats } = await import('html5-qrcode');
+
       const scanner = new Html5Qrcode(scannerContainerId, {
         // Only scan barcode formats (skip QR — faster detection)
         formatsToSupport: [
@@ -391,7 +394,7 @@ export default function ScanScreen({ user }: Props) {
               <LogToDiaryButton
                 productName={product.product_name || 'Unknown product'}
                 rating={analysis?.rating || 'green'}
-                user={user}
+                addEntry={addEntry}
               />
             </div>
           )}
@@ -436,6 +439,7 @@ export default function ScanScreen({ user }: Props) {
             const file = e.target.files?.[0];
             if (!file) return;
             try {
+              const { Html5Qrcode } = await import('html5-qrcode');
               const scanner = new Html5Qrcode('file-scanner-temp');
               const result = await scanner.scanFile(file, true);
               handleBarcode(result);

@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { useUser } from './hooks/useUser';
 import BottomNav from './components/BottomNav';
 import { runMigration } from './migration';
+import { ensureDb } from './utils/fodmapAnalyzer';
 
 const HomeScreen = lazy(() => import('./screens/HomeScreen'));
 const ScanScreen = lazy(() => import('./screens/ScanScreen'));
@@ -45,9 +46,12 @@ export default function App() {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    runMigration()
-      .then(() => setReady(true))
-      .catch(() => setReady(true)); // don't block the app if migration fails
+    // Run migration and pre-load FODMAP database in parallel.
+    // ensureDb() fetches the 108KB JSON chunk so it's cached before first search.
+    Promise.all([
+      runMigration().catch(() => {}),
+      ensureDb().catch(() => {}),
+    ]).then(() => setReady(true));
   }, []);
 
   if (!ready) {

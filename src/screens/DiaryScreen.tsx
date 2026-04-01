@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import type { MealType, DiaryFood, FodmapRating, OverallFeeling, User, BristolScore } from '../types';
+import type { MealType, DiaryFood, DaySymptoms, FodmapRating, OverallFeeling, User, BristolScore } from '../types';
 import { useDiary } from '../hooks/useDiary';
 import { searchFoods } from '../utils/fodmapAnalyzer';
 import FodmapBadge from '../components/FodmapBadge';
@@ -165,8 +165,11 @@ const BRISTOL_LABELS = [
 ];
 
 // Symptom tracker with auto-save — expanded with full symptom types + lifestyle
-function SymptomTracker({ date, user }: { date: string; user: User }) {
-  const { getSymptomsForDate, setSymptomsForDate } = useDiary(user);
+function SymptomTracker({ date, getSymptomsForDate, setSymptomsForDate }: {
+  date: string;
+  getSymptomsForDate: (date: string) => DaySymptoms | undefined;
+  setSymptomsForDate: (s: DaySymptoms) => void;
+}) {
   const existing = getSymptomsForDate(date);
 
   const [feeling, setFeeling] = useState<OverallFeeling>(existing?.overallFeeling ?? 'good');
@@ -611,7 +614,11 @@ export default function DiaryScreen({ user }: Props) {
       </div>
 
       {/* Symptom tracker */}
-      <SymptomTracker date={selectedDate} user={user} />
+      <SymptomTracker
+        date={selectedDate}
+        getSymptomsForDate={getSymptomsForDate}
+        setSymptomsForDate={diary.setSymptomsForDate}
+      />
 
       {/* Undo toast — Fix #11 */}
       {undoAction && (

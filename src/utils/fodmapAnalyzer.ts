@@ -1,10 +1,35 @@
 import type { FodmapFood, FodmapDatabase, FodmapRating } from '../types';
-import database from '../data/fodmap-database.json';
 
-const db = database as FodmapDatabase;
+// Lazy-load the 108KB FODMAP database on first use instead of bundling it
+// in the main chunk. Once loaded, it stays cached in memory.
+let _db: FodmapDatabase | null = null;
+let _dbPromise: Promise<FodmapDatabase> | null = null;
+
+function loadDb(): Promise<FodmapDatabase> {
+  if (_db) return Promise.resolve(_db);
+  if (!_dbPromise) {
+    _dbPromise = import('../data/fodmap-database.json').then((m) => {
+      _db = (m.default ?? m) as FodmapDatabase;
+      return _db;
+    });
+  }
+  return _dbPromise;
+}
+
+// Synchronous accessor — returns null before first load completes.
+// All UI code should call ensureDb() on mount, then use getDb() in hot paths.
+function getDb(): FodmapDatabase | null {
+  return _db;
+}
+
+/** Call once (e.g. on app init or first keystroke) to warm the cache. */
+export function ensureDb(): Promise<FodmapDatabase> {
+  return loadDb();
+}
 
 export function searchFoods(query: string): FodmapFood[] {
-  if (!query || query.length < 2) return [];
+  const db = getDb();
+  if (!db || !query || query.length < 2) return [];
 
   const q = query.toLowerCase().trim();
 
@@ -187,6 +212,9 @@ export function analyzeIngredients(ingredientText: string): {
   // Split by comma (but not decimal commas like "1,8%") or semicolon
   const segments = preprocessed.split(/,(?!\d)|;/).map(s => s.trim().replace(/\u00B7/g, ','));
 
+  const db = getDb();
+  if (!db) return { rating: 'green' as const, flags: [] };
+
   for (const item of db.highFodmapIngredients) {
     const pattern = normalize(item.ingredient);
     if (!text.includes(pattern)) continue;
@@ -233,6 +261,8 @@ export function analyzeIngredients(ingredientText: string): {
 }
 
 export function getFoodByName(name: string): FodmapFood | undefined {
+  const db = getDb();
+  if (!db) return undefined;
   const q = name.toLowerCase().trim();
   return db.foods.find(
     (f) =>
@@ -243,9 +273,13 @@ export function getFoodByName(name: string): FodmapFood | undefined {
 }
 
 export function getAllCategories(): string[] {
+  const db = getDb();
+  if (!db) return [];
   return [...new Set(db.foods.map((f) => f.category))].sort();
 }
 
 export function getFoodsByCategory(category: string): FodmapFood[] {
+  const db = getDb();
+  if (!db) return [];
   return db.foods.filter((f) => f.category === category);
 }
