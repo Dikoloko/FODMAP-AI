@@ -4,6 +4,13 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
+  server: {
+    headers: {
+      // Prevent the browser from caching pre-bundled dep chunks in dev.
+      // Stale cached versions (old ?v= hashes) cause two copies of React to load.
+      'Cache-Control': 'no-store',
+    },
+  },
   test: {
     environment: 'jsdom',
     setupFiles: ['./src/test-setup.ts'],
