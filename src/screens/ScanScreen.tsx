@@ -161,29 +161,36 @@ export default function ScanScreen({ user }: Props) {
       const scanWidth = Math.round(containerWidth * 0.92);
       const scanHeight = Math.round(scanWidth * 0.5);
 
-      await scanner.start(
-        {
-          facingMode: 'environment',
-          // Prefer 720p — ideal means "accept lower on older cameras"
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          // Autofocus hint: continuous mode helps older cameras lock on barcodes faster
-          // (in advanced so unsupported browsers silently ignore it)
-          advanced: [{ focusMode: 'continuous' } as MediaTrackConstraintSet],
-        },
-        {
-          fps: 10, // Lower fps reduces CPU load on older phones
-          qrbox: { width: scanWidth, height: scanHeight },
-          aspectRatio: 1.5,
-          disableFlip: false,
-        },
-        (decodedText) => {
-          handleBarcode(decodedText);
-        },
-        () => {
-          // ignore scan failures (no barcode in frame)
-        }
-      );
+      const scanConfig = {
+        fps: 10, // Lower fps reduces CPU load on older phones
+        qrbox: { width: scanWidth, height: scanHeight },
+        aspectRatio: 1.5,
+        disableFlip: false,
+      };
+      const onSuccess = (decodedText: string) => { handleBarcode(decodedText); };
+      const onFailure = () => { /* ignore — no barcode in frame */ };
+
+      // Try with resolution hints first; fall back to bare minimum if rejected
+      try {
+        await scanner.start(
+          {
+            facingMode: 'environment',
+            // ideal means "use if available, don't fail if not"
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+          scanConfig,
+          onSuccess,
+          onFailure,
+        );
+      } catch (constraintErr) {
+        logger.warn('scan_start_preferred_failed', {
+          name: constraintErr instanceof Error ? constraintErr.name : 'unknown',
+          message: constraintErr instanceof Error ? constraintErr.message : String(constraintErr),
+        });
+        // Retry with the absolute minimum — just ask for the back camera
+        await scanner.start({ facingMode: 'environment' }, scanConfig, onSuccess, onFailure);
+      }
 
       // Probe for torch support after camera stream is live
       setTimeout(() => {
@@ -200,13 +207,13 @@ export default function ScanScreen({ user }: Props) {
 
     } catch (err) {
       const errName = err instanceof Error ? err.name : '';
+      const errMsg = err instanceof Error ? err.message : String(err);
+      logger.warn('scan_start_failed', { name: errName, message: errMsg });
+
       if (errName === 'NotAllowedError') {
         setCameraError('Camera permission denied. Please allow camera access and try again.');
       } else if (errName === 'NotFoundError') {
         setCameraError('No camera found. Use manual barcode entry below.');
-      } else if (errName === 'OverconstrainedError') {
-        // Retry without advanced constraints (autofocus hint not supported)
-        setCameraError('Could not start camera. Try manual entry instead.');
       } else {
         setCameraError('Could not start camera. Try manual entry instead.');
       }
