@@ -135,59 +135,64 @@ export default function ScanScreen({ user }: Props) {
     setCameraError(null);
     setScanState('scanning');
 
-    await new Promise((r) => setTimeout(r, 100));
-
     try {
       // Dynamic import — html5-qrcode (~200KB) only loads when user taps scan
       const { Html5Qrcode, Html5QrcodeSupportedFormats } = await import('html5-qrcode');
 
-      const scanner = new Html5Qrcode(scannerContainerId, {
-        // Only scan barcode formats (skip QR — faster detection)
-        formatsToSupport: [
-          Html5QrcodeSupportedFormats.EAN_13,
-          Html5QrcodeSupportedFormats.EAN_8,
-          Html5QrcodeSupportedFormats.UPC_A,
-          Html5QrcodeSupportedFormats.UPC_E,
-          Html5QrcodeSupportedFormats.CODE_128,
-          Html5QrcodeSupportedFormats.CODE_39,
-          Html5QrcodeSupportedFormats.ITF,
-        ],
-        verbose: false,
-      });
-      scannerRef.current = scanner;
+      // The scanner div is always in the DOM (hidden via CSS when not scanning),
+      // so Html5Qrcode can always find it via getElementById.
+      const formats = [
+        Html5QrcodeSupportedFormats.EAN_13,
+        Html5QrcodeSupportedFormats.EAN_8,
+        Html5QrcodeSupportedFormats.UPC_A,
+        Html5QrcodeSupportedFormats.UPC_E,
+        Html5QrcodeSupportedFormats.CODE_128,
+        Html5QrcodeSupportedFormats.CODE_39,
+        Html5QrcodeSupportedFormats.ITF,
+      ];
 
-      // Use a conservative fixed qrbox — dynamic sizing can exceed the rendered
-      // video height on small screens and cause html5-qrcode to throw internally.
-      // aspectRatio is intentionally omitted: html5-qrcode passes it as a *required*
-      // getUserMedia constraint (not ideal), which causes OverconstrainedError on
-      // many phones and kills both start attempts.
+      // qrbox as a function so it never exceeds the actual video dimensions
       const scanConfig = {
         fps: 10,
-        qrbox: { width: 250, height: 150 },
+        qrbox: (w: number, h: number) => ({
+          width: Math.min(250, Math.floor(w * 0.8)),
+          height: Math.min(150, Math.floor(h * 0.6)),
+        }),
       };
       const onSuccess = (decodedText: string) => { handleBarcode(decodedText); };
       const onFailure = () => { /* ignore — no barcode in frame */ };
 
-      // Try with resolution hints first; fall back to bare minimum if rejected
+      // Create scanner instance. If start fails we throw it away and create a new
+      // one — reusing a failed instance can leave html5-qrcode in a broken state.
+      const makeScanner = () => new Html5Qrcode(scannerContainerId, { formatsToSupport: formats, verbose: false });
+
+      let started = false;
+
+      // Attempt 1: back camera, no extra constraints
       try {
-        await scanner.start(
-          {
-            facingMode: 'environment',
-            width: { ideal: 1280 },
-            height: { ideal: 720 },
-          },
-          scanConfig,
-          onSuccess,
-          onFailure,
-        );
-        logger.log('scan_start_preferred_succeeded', {});
-      } catch (constraintErr) {
-        const cName = constraintErr instanceof Error ? constraintErr.name : 'unknown';
-        const cMsg = constraintErr instanceof Error ? constraintErr.message : String(constraintErr);
-        logger.warn('scan_start_preferred_failed', { name: cName, message: cMsg });
-        // Retry with the absolute minimum — just ask for the back camera
+        const scanner = makeScanner();
+        scannerRef.current = scanner;
         await scanner.start({ facingMode: 'environment' }, scanConfig, onSuccess, onFailure);
-        logger.log('scan_start_fallback_succeeded', {});
+        logger.info('scan_start_environment_succeeded', {});
+        started = true;
+      } catch (err1) {
+        logger.warn('scan_start_environment_failed', { name: err1 instanceof Error ? err1.name : 'unknown', message: err1 instanceof Error ? err1.message : String(err1) });
+        scannerRef.current = null;
+      }
+
+      // Attempt 2: any camera (front or back) — last resort
+      if (!started) {
+        try {
+          const scanner = makeScanner();
+          scannerRef.current = scanner;
+          await scanner.start({ facingMode: 'user' }, scanConfig, onSuccess, onFailure);
+          logger.info('scan_start_user_succeeded', {});
+          started = true;
+        } catch (err2) {
+          logger.warn('scan_start_user_failed', { name: err2 instanceof Error ? err2.name : 'unknown', message: err2 instanceof Error ? err2.message : String(err2) });
+          scannerRef.current = null;
+          throw err2; // propagate to outer catch
+        }
       }
 
       // Probe for torch support after camera stream is live
@@ -280,33 +285,33 @@ export default function ScanScreen({ user }: Props) {
         </>
       )}
 
-      {scanState === 'scanning' && (
-        <div className="mb-4">
-          <div id={scannerContainerId} className="rounded-xl overflow-hidden mb-3" style={{ minHeight: '280px' }} />
-          <p className="text-xs text-gray-400 text-center mb-2">Hold steady — keep barcode inside the box</p>
-          <div className="flex gap-2">
+      {/* Scanner div is ALWAYS in the DOM so html5-qrcode can find it immediately.
+          Visibility is controlled by the wrapper's display style. */}
+      <div className="mb-4" style={{ display: scanState === 'scanning' ? 'block' : 'none' }}>
+        <div id={scannerContainerId} className="rounded-xl overflow-hidden mb-3" style={{ minHeight: '280px' }} />
+        <p className="text-xs text-gray-400 text-center mb-2">Hold steady — keep barcode inside the box</p>
+        <div className="flex gap-2">
+          <button
+            onClick={async () => { await stopScanner(); setScanState('idle'); }}
+            className="flex-1 py-2.5 text-sm text-gray-600 bg-gray-100 rounded-xl"
+          >
+            Cancel scan
+          </button>
+          {torchSupported && (
             <button
-              onClick={async () => { await stopScanner(); setScanState('idle'); }}
-              className="flex-1 py-2.5 text-sm text-gray-600 bg-gray-100 rounded-xl"
+              onClick={toggleTorch}
+              aria-label={torchOn ? 'Turn off flashlight' : 'Turn on flashlight'}
+              className={`px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${
+                torchOn
+                  ? 'bg-yellow-400 text-yellow-900'
+                  : 'bg-gray-100 text-gray-600'
+              }`}
             >
-              Cancel scan
+              {torchOn ? '🔦 On' : '🔦 Off'}
             </button>
-            {torchSupported && (
-              <button
-                onClick={toggleTorch}
-                aria-label={torchOn ? 'Turn off flashlight' : 'Turn on flashlight'}
-                className={`px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${
-                  torchOn
-                    ? 'bg-yellow-400 text-yellow-900'
-                    : 'bg-gray-100 text-gray-600'
-                }`}
-              >
-                {torchOn ? '🔦 On' : '🔦 Off'}
-              </button>
-            )}
-          </div>
+          )}
         </div>
-      )}
+      </div>
 
       {/* Results */}
       {scanState === 'result' && (
