@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { lookupBarcode, type OpenFoodFactsProduct } from '../utils/api';
+import { logger } from '../utils/logger';
 
 interface State {
   loading: boolean;
@@ -27,8 +28,16 @@ export function useOpenFoodFacts() {
       } else {
         setState({ loading: false, product: null, error: null, notFound: true });
       }
-    } catch {
-      setState({ loading: false, product: null, error: 'Failed to look up product. Check your connection.', notFound: false });
+    } catch (err) {
+      logger.error('off_lookup_failed', { message: err instanceof Error ? err.message : String(err) });
+      const isTimeout = err instanceof Error && err.name === 'AbortError';
+      const isNetworkError = err instanceof TypeError;
+      const message = isTimeout
+        ? 'Request timed out — please try again'
+        : isNetworkError
+        ? 'No internet connection'
+        : 'Failed to look up product. Check your connection.';
+      setState({ loading: false, product: null, error: message, notFound: false });
     }
   }, []);
 

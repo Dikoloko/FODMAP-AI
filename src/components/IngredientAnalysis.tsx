@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { parseClaudeJson } from '../utils/parseClaudeJson';
+import { useAbortController } from '../hooks/useAbortController';
 import type { FodmapRating } from '../types';
 import type { IngredientFlag } from '../utils/fodmapAnalyzer';
 import FodmapBadge from './FodmapBadge';
@@ -9,11 +11,15 @@ interface AIResult {
   safe: boolean;
 }
 
+const FRONTEND_TIMEOUT = 35_000;
+
 function AIFallbackButton({ ingredientText, onResult }: { ingredientText: string; onResult: (r: AIResult) => void }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const beginRequest = useAbortController(FRONTEND_TIMEOUT);
 
   const check = async () => {
+    const { signal, cleanup } = beginRequest();
     setLoading(true);
     setError(null);
     try {
@@ -32,16 +38,25 @@ Respond in JSON:
   "safe": true/false
 }`,
         }),
+        signal,
       });
-      if (!res.ok) throw new Error(`Failed (${res.status})`);
-      const data = await res.json();
-      const text = data.content?.[0]?.text || '';
-      const match = text.match(/\{[\s\S]*\}/);
-      if (!match) throw new Error('Could not parse response');
-      onResult(JSON.parse(match[0]));
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({ error: `Failed (${res.status})` }));
+        throw new Error(errBody.error || `Failed (${res.status})`);
+      }
+      let data: unknown;
+      try {
+        data = await res.json();
+      } catch {
+        throw new Error('Server returned unreadable response');
+      }
+      const text = (data as { content?: Array<{ text: string }> }).content?.[0]?.text || '';
+      onResult(parseClaudeJson<AIResult>(text));
     } catch (err) {
+      if (err instanceof Error && err.name === 'AbortError') return;
       setError(err instanceof Error ? err.message : 'Something went wrong');
     } finally {
+      cleanup();
       setLoading(false);
     }
   };

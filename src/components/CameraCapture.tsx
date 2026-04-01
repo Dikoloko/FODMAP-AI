@@ -1,4 +1,5 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
+import { logger } from '../utils/logger';
 
 interface Props {
   onCapture: (base64: string) => void;
@@ -9,6 +10,7 @@ function compressImage(file: File, maxWidth = 1024, quality = 0.7): Promise<stri
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = (e) => {
+      if (!e.target?.result) { reject(new Error('Image read failed')); return; }
       const img = new Image();
       img.onload = () => {
         const canvas = document.createElement('canvas');
@@ -19,7 +21,8 @@ function compressImage(file: File, maxWidth = 1024, quality = 0.7): Promise<stri
         }
         canvas.width = width;
         canvas.height = height;
-        const ctx = canvas.getContext('2d')!;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) { reject(new Error('Canvas context not available')); return; }
         ctx.drawImage(img, 0, 0, width, height);
         const dataUrl = canvas.toDataURL('image/jpeg', quality);
         // Strip the data:image/jpeg;base64, prefix
@@ -36,11 +39,18 @@ function compressImage(file: File, maxWidth = 1024, quality = 0.7): Promise<stri
 export default function CameraCapture({ onCapture, loading }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const galleryInputRef = useRef<HTMLInputElement>(null);
+  const [captureError, setCaptureError] = useState<string | null>(null);
 
   const handleFile = async (file: File | undefined) => {
     if (!file) return;
-    const base64 = await compressImage(file);
-    onCapture(base64);
+    setCaptureError(null);
+    try {
+      const base64 = await compressImage(file);
+      onCapture(base64);
+    } catch (err) {
+      logger.error('camera_compression_failed', { message: err instanceof Error ? err.message : String(err) });
+      setCaptureError('Could not process image. Please try another photo.');
+    }
   };
 
   return (
@@ -93,6 +103,12 @@ export default function CameraCapture({ onCapture, loading }: Props) {
       >
         Choose from photo library
       </button>
+
+      {captureError && (
+        <div className="p-3 bg-fodmap-red/10 rounded-xl">
+          <p className="text-sm text-fodmap-red">{captureError}</p>
+        </div>
+      )}
     </div>
   );
 }

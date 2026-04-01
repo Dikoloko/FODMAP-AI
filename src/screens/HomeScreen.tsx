@@ -6,6 +6,7 @@ import FoodCard from '../components/FoodCard';
 import { searchFoods } from '../utils/fodmapAnalyzer';
 import { useDiary } from '../hooks/useDiary';
 import { useDataExport } from '../hooks/useDataExport';
+import { toDateString } from '../utils/dateHelpers';
 
 function getGreeting(user: User): string {
   const hour = new Date().getHours();
@@ -27,9 +28,6 @@ interface Props {
   onSwitchUser: (user: User) => void;
 }
 
-function toDateString(date: Date) {
-  return date.toISOString().split('T')[0];
-}
 
 export default function HomeScreen({ user, onSwitchUser }: Props) {
   const navigate = useNavigate();
@@ -38,21 +36,23 @@ export default function HomeScreen({ user, onSwitchUser }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { getEntriesForDate, getSymptomsForDate, addEntry } = useDiary(user);
 
-  const today = toDateString(new Date());
-  const todayEntries = getEntriesForDate(today);
-  const todaySymptoms = getSymptomsForDate(today);
-  const todayFoods = todayEntries.flatMap(e => e.foods);
-
-  const results = useMemo(() => searchFoods(query), [query]);
-
-  // Guess meal from time of day
-  const guessedMeal = (() => {
+  // Fix #2: memoize all per-render derived values
+  const today = useMemo(() => toDateString(new Date()), []);
+  const todayEntries = useMemo(() => getEntriesForDate(today), [getEntriesForDate, today]);
+  const todaySymptoms = useMemo(() => getSymptomsForDate(today), [getSymptomsForDate, today]);
+  const todayFoods = useMemo(() => todayEntries.flatMap(e => e.foods), [todayEntries]);
+  const guessedMeal = useMemo(() => {
     const h = new Date().getHours();
     if (h < 11) return 'breakfast' as const;
     if (h < 15) return 'lunch' as const;
     if (h < 21) return 'dinner' as const;
     return 'snack' as const;
-  })();
+  }, []);
+
+  const results = useMemo(() => searchFoods(query) ?? [], [query]);
+
+  // Fix #10: extract once — avoids filtering the array twice in JSX
+  const redFoodCount = todayFoods.filter(f => f.rating === 'red').length;
 
   return (
     <div className="flex-1 px-4 pt-4 pb-24">
@@ -145,9 +145,9 @@ export default function HomeScreen({ user, onSwitchUser }: Props) {
               <div className="flex flex-col gap-1.5 mt-2">
                 <p className="text-sm text-gray-600">
                   {todayFoods.length} food{todayFoods.length !== 1 ? 's' : ''} logged
-                  {todayFoods.filter(f => f.rating === 'red').length > 0 && (
+                  {redFoodCount > 0 && (
                     <span className="text-fodmap-red font-medium">
-                      {' '}({todayFoods.filter(f => f.rating === 'red').length} high FODMAP)
+                      {' '}({redFoodCount} high FODMAP)
                     </span>
                   )}
                 </p>

@@ -1,8 +1,9 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback, useReducer } from 'react';
 import type { MealType, DiaryFood, DaySymptoms, FodmapRating, OverallFeeling, User, BristolScore } from '../types';
 import { useDiary } from '../hooks/useDiary';
 import { searchFoods } from '../utils/fodmapAnalyzer';
 import FodmapBadge from '../components/FodmapBadge';
+import { toDateString } from '../utils/dateHelpers';
 
 const MEALS: { key: MealType; label: string; icon: string }[] = [
   { key: 'breakfast', label: 'Breakfast', icon: '🌅' },
@@ -22,9 +23,6 @@ function formatDate(date: string) {
   return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' });
 }
 
-function toDateString(date: Date) {
-  return date.toISOString().split('T')[0];
-}
 
 interface Props {
   user: User;
@@ -49,13 +47,68 @@ function UndoToast({ message, onUndo, onDismiss }: { message: string; onUndo: ()
   );
 }
 
+// Fix #4: useReducer to batch all symptom state into one object
+type SymptomState = {
+  feeling: OverallFeeling;
+  bloating: number;
+  pain: number;
+  gas: number;
+  diarrhea: number;
+  constipation: number;
+  nausea: number;
+  fatigue: number;
+  urgency: number;
+  bristol: BristolScore;
+  stress: number;
+  sleepQuality: number;
+  exercise: boolean;
+  menstruation: boolean;
+  otherSymptoms: string;
+};
+
+type SymptomAction =
+  | { type: 'reset'; payload: SymptomState }
+  | { type: 'patch'; payload: Partial<SymptomState> };
+
+function symptomReducer(state: SymptomState, action: SymptomAction): SymptomState {
+  if (action.type === 'reset') return action.payload;
+  return { ...state, ...action.payload };
+}
+
+function buildInitialSymptomState(s: DaySymptoms | undefined): SymptomState {
+  return {
+    feeling: s?.overallFeeling ?? 'good',
+    bloating: s?.bloating ?? 0,
+    pain: s?.pain ?? 0,
+    gas: s?.gas ?? 0,
+    diarrhea: s?.diarrhea ?? 0,
+    constipation: s?.constipation ?? 0,
+    nausea: s?.nausea ?? 0,
+    fatigue: s?.fatigue ?? 0,
+    urgency: s?.urgency ?? 0,
+    bristol: (s?.bristol ?? 0) as BristolScore,
+    stress: s?.stress ?? 0,
+    sleepQuality: s?.sleepQuality ?? 0,
+    exercise: s?.exercise ?? false,
+    menstruation: s?.menstruation ?? false,
+    otherSymptoms: s?.otherSymptoms ?? '',
+  };
+}
+
 // Add food modal
 function AddFoodForm({ onAdd, onCancel }: { onAdd: (food: DiaryFood) => void; onCancel: () => void }) {
+  // Fix #8: separate input value (immediate) from search query (debounced 300ms)
+  const [inputValue, setInputValue] = useState('');
   const [query, setQuery] = useState('');
   const [customName, setCustomName] = useState('');
   const [customRating, setCustomRating] = useState<FodmapRating>('green');
 
-  const results = useMemo(() => searchFoods(query), [query]);
+  useEffect(() => {
+    const t = setTimeout(() => setQuery(inputValue), 300);
+    return () => clearTimeout(t);
+  }, [inputValue]);
+
+  const results = useMemo(() => searchFoods(query) ?? [], [query]);
 
   return (
     <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
@@ -63,15 +116,15 @@ function AddFoodForm({ onAdd, onCancel }: { onAdd: (food: DiaryFood) => void; on
 
       <input
         type="text"
-        value={query}
-        onChange={(e) => { setQuery(e.target.value); setCustomName(e.target.value); }}
+        value={inputValue}
+        onChange={(e) => { setInputValue(e.target.value); setCustomName(e.target.value); }}
         placeholder="Search food or type name..."
         autoFocus
         className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 mb-2"
       />
 
       {/* Search results */}
-      {query.length >= 2 && results.length > 0 && (
+      {inputValue.length >= 2 && results.length > 0 && (
         <div className="max-h-48 overflow-y-auto mb-2 flex flex-col gap-1">
           {results.slice(0, 6).map((food) => (
             <button
@@ -92,7 +145,7 @@ function AddFoodForm({ onAdd, onCancel }: { onAdd: (food: DiaryFood) => void; on
       )}
 
       {/* Custom entry if no match */}
-      {query.length >= 2 && (
+      {inputValue.length >= 2 && (
         <div className="border-t border-gray-100 pt-2 mt-1">
           <p className="text-xs text-gray-400 mb-2">Or add as custom entry:</p>
           <div className="flex gap-2 mb-2">
@@ -100,13 +153,7 @@ function AddFoodForm({ onAdd, onCancel }: { onAdd: (food: DiaryFood) => void; on
               <button
                 key={r}
                 onClick={() => setCustomRating(r)}
-                className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                  customRating === r
-                    ? r === 'green' ? 'bg-fodmap-green/15 text-fodmap-green'
-                    : r === 'amber' ? 'bg-fodmap-amber/15 text-fodmap-amber'
-                    : 'bg-fodmap-red/15 text-fodmap-red'
-                    : 'bg-gray-50 text-gray-400'
-                }`}
+                className={`flex-1 py-1.5 rounded-lg text-xs font-medium transition-colors ${getRatingButtonClass(r, customRating === r)}`}
               >
                 {r === 'green' ? 'Low' : r === 'amber' ? 'Moderate' : 'High'}
               </button>
@@ -114,14 +161,14 @@ function AddFoodForm({ onAdd, onCancel }: { onAdd: (food: DiaryFood) => void; on
           </div>
           <button
             onClick={() => {
-              const name = (customName || query).trim();
+              const name = (customName || inputValue).trim();
               if (!name) return;
               onAdd({ name, rating: customRating, fodmapTypes: [] });
             }}
-            disabled={!(customName || query).trim()}
+            disabled={!(customName || inputValue).trim()}
             className="w-full py-2 bg-primary text-white text-sm font-medium rounded-lg active:scale-[0.98] disabled:opacity-40"
           >
-            Add "{customName || query}"
+            Add "{customName || inputValue}"
           </button>
         </div>
       )}
@@ -153,6 +200,29 @@ function SymptomSlider({ label, emoji, value, hint, onChange }: {
   );
 }
 
+const RATING_DOT_CLASS: Record<FodmapRating, string> = {
+  green: 'bg-fodmap-green',
+  amber: 'bg-fodmap-amber',
+  red: 'bg-fodmap-red',
+};
+
+const RATING_SELECTED_CLASS: Record<FodmapRating, string> = {
+  green: 'bg-fodmap-green/15 text-fodmap-green',
+  amber: 'bg-fodmap-amber/15 text-fodmap-amber',
+  red: 'bg-fodmap-red/15 text-fodmap-red',
+};
+
+function getRatingButtonClass(rating: FodmapRating, isSelected: boolean): string {
+  return isSelected ? RATING_SELECTED_CLASS[rating] : 'bg-gray-50 text-gray-400';
+}
+
+function getBristolButtonClass(score: BristolScore, isSelected: boolean): string {
+  if (!isSelected) return 'bg-gray-50 text-gray-400';
+  if (score <= 2) return 'bg-fodmap-amber/20 text-fodmap-amber ring-2 ring-fodmap-amber/30';
+  if (score <= 5) return 'bg-fodmap-green/20 text-fodmap-green ring-2 ring-fodmap-green/30';
+  return 'bg-fodmap-red/20 text-fodmap-red ring-2 ring-fodmap-red/30';
+}
+
 const BRISTOL_LABELS = [
   '', // 0 = not logged
   '1 — Hard lumps',
@@ -164,83 +234,77 @@ const BRISTOL_LABELS = [
   '7 — Watery',
 ];
 
-// Symptom tracker with auto-save — expanded with full symptom types + lifestyle
+// Symptom tracker with auto-save — Fix #3 + #4: useReducer batches all symptom state
+// into one object; stable autoSave reads latest state via ref instead of being recreated
+// on every slider change (was 16 deps before).
 function SymptomTracker({ date, getSymptomsForDate, setSymptomsForDate }: {
   date: string;
   getSymptomsForDate: (date: string) => DaySymptoms | undefined;
   setSymptomsForDate: (s: DaySymptoms) => void;
 }) {
-  const existing = getSymptomsForDate(date);
-
-  const [feeling, setFeeling] = useState<OverallFeeling>(existing?.overallFeeling ?? 'good');
-  const [bloating, setBloating] = useState(existing?.bloating ?? 0);
-  const [pain, setPain] = useState(existing?.pain ?? 0);
-  const [gas, setGas] = useState(existing?.gas ?? 0);
-  const [diarrhea, setDiarrhea] = useState(existing?.diarrhea ?? 0);
-  const [constipation, setConstipation] = useState(existing?.constipation ?? 0);
-  const [nausea, setNausea] = useState(existing?.nausea ?? 0);
-  const [fatigue, setFatigue] = useState(existing?.fatigue ?? 0);
-  const [urgency, setUrgency] = useState(existing?.urgency ?? 0);
-  const [bristol, setBristol] = useState<BristolScore>(existing?.bristol ?? 0);
-  const [stress, setStress] = useState(existing?.stress ?? 0);
-  const [sleepQuality, setSleepQuality] = useState(existing?.sleepQuality ?? 0);
-  const [exercise, setExercise] = useState(existing?.exercise ?? false);
-  const [menstruation, setMenstruation] = useState(existing?.menstruation ?? false);
-  const [otherSymptoms, setOtherSymptoms] = useState(existing?.otherSymptoms ?? '');
+  const [s, dispatch] = useReducer(symptomReducer, buildInitialSymptomState(getSymptomsForDate(date)));
   const [saved, setSaved] = useState(false);
   const [showMore, setShowMore] = useState(false);
   const saveTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const savedTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  // Keep a ref so autoSave can read the latest state without it being a dep
+  const latestState = useRef(s);
+  useEffect(() => { latestState.current = s; });
 
   // Reset state when date changes
   useEffect(() => {
-    const s = getSymptomsForDate(date);
-    setFeeling(s?.overallFeeling ?? 'good');
-    setBloating(s?.bloating ?? 0);
-    setPain(s?.pain ?? 0);
-    setGas(s?.gas ?? 0);
-    setDiarrhea(s?.diarrhea ?? 0);
-    setConstipation(s?.constipation ?? 0);
-    setNausea(s?.nausea ?? 0);
-    setFatigue(s?.fatigue ?? 0);
-    setUrgency(s?.urgency ?? 0);
-    setBristol(s?.bristol ?? 0);
-    setStress(s?.stress ?? 0);
-    setSleepQuality(s?.sleepQuality ?? 0);
-    setExercise(s?.exercise ?? false);
-    setMenstruation(s?.menstruation ?? false);
-    setOtherSymptoms(s?.otherSymptoms ?? '');
-    setSaved(false);
+    dispatch({ type: 'reset', payload: buildInitialSymptomState(getSymptomsForDate(date)) });
+    setSaved(false); // eslint-disable-line react-hooks/set-state-in-effect -- intentional reset on date change
   }, [date, getSymptomsForDate]);
 
-  // Auto-save with debounce
-  const allValues = useMemo(() => ({
-    date, bloating, pain, gas, diarrhea, constipation, nausea, fatigue, urgency,
-    bristol, otherSymptoms, overallFeeling: feeling,
-    stress, sleepQuality, exercise, menstruation,
-  }), [date, bloating, pain, gas, diarrhea, constipation, nausea, fatigue, urgency,
-    bristol, otherSymptoms, feeling, stress, sleepQuality, exercise, menstruation]);
-
+  // Fix #4: autoSave is now stable — only depends on date and setSymptomsForDate,
+  // not on every individual symptom value. Reads latest via ref.
   const autoSave = useCallback(() => {
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      setSymptomsForDate(allValues);
+      const st = latestState.current;
+      setSymptomsForDate({
+        date,
+        overallFeeling: st.feeling,
+        bloating: st.bloating,
+        pain: st.pain,
+        gas: st.gas,
+        diarrhea: st.diarrhea,
+        constipation: st.constipation,
+        nausea: st.nausea,
+        fatigue: st.fatigue,
+        urgency: st.urgency,
+        bristol: st.bristol,
+        stress: st.stress,
+        sleepQuality: st.sleepQuality,
+        exercise: st.exercise,
+        menstruation: st.menstruation,
+        otherSymptoms: st.otherSymptoms,
+      });
       setSaved(true);
-      setTimeout(() => setSaved(false), 1500);
+      if (savedTimer.current) clearTimeout(savedTimer.current);
+      savedTimer.current = setTimeout(() => setSaved(false), 1500);
     }, 800);
-  }, [allValues, setSymptomsForDate]);
+  }, [date, setSymptomsForDate]);
 
   const isFirstRender = useRef(true);
   useEffect(() => {
     if (isFirstRender.current) { isFirstRender.current = false; return; }
     autoSave();
-    return () => { if (saveTimer.current) clearTimeout(saveTimer.current); };
-  }, [autoSave]);
+    return () => {
+      if (saveTimer.current) clearTimeout(saveTimer.current);
+      if (savedTimer.current) clearTimeout(savedTimer.current);
+    };
+  }, [s, autoSave]);
 
   useEffect(() => { isFirstRender.current = true; }, [date]);
 
-  // Count active symptoms for badge
-  const activeSymptomCount = [bloating, pain, gas, diarrhea, constipation, nausea, fatigue, urgency]
-    .filter(v => v > 0).length;
+  // Fix #3: plain arithmetic instead of array allocation + filter just to count
+  const activeSymptomCount =
+    (s.bloating > 0 ? 1 : 0) + (s.pain > 0 ? 1 : 0) + (s.gas > 0 ? 1 : 0) +
+    (s.diarrhea > 0 ? 1 : 0) + (s.constipation > 0 ? 1 : 0) + (s.nausea > 0 ? 1 : 0) +
+    (s.fatigue > 0 ? 1 : 0) + (s.urgency > 0 ? 1 : 0);
 
   return (
     <div className="flex flex-col gap-3">
@@ -258,9 +322,9 @@ function SymptomTracker({ date, getSymptomsForDate, setSymptomsForDate }: {
           {FEELINGS.map(({ value, emoji, label }) => (
             <button
               key={value}
-              onClick={() => setFeeling(value)}
+              onClick={() => dispatch({ type: 'patch', payload: { feeling: value } })}
               className={`flex-1 flex flex-col items-center gap-1 py-2 rounded-lg transition-colors ${
-                feeling === value ? 'bg-primary-light ring-2 ring-primary/30' : 'bg-gray-50'
+                s.feeling === value ? 'bg-primary-light ring-2 ring-primary/30' : 'bg-gray-50'
               }`}
             >
               <span className="text-2xl">{emoji}</span>
@@ -281,9 +345,9 @@ function SymptomTracker({ date, getSymptomsForDate, setSymptomsForDate }: {
           </h3>
         </div>
 
-        <SymptomSlider label="Bloating" emoji="🫧" hint="Swollen, tight feeling in your belly" value={bloating} onChange={setBloating} />
-        <SymptomSlider label="Pain" emoji="🔥" hint="Cramping or aching in your abdomen" value={pain} onChange={setPain} />
-        <SymptomSlider label="Gas" emoji="💨" hint="Excessive flatulence or trapped wind" value={gas} onChange={setGas} />
+        <SymptomSlider label="Bloating" emoji="🫧" hint="Swollen, tight feeling in your belly" value={s.bloating} onChange={(v) => dispatch({ type: 'patch', payload: { bloating: v } })} />
+        <SymptomSlider label="Pain" emoji="🔥" hint="Cramping or aching in your abdomen" value={s.pain} onChange={(v) => dispatch({ type: 'patch', payload: { pain: v } })} />
+        <SymptomSlider label="Gas" emoji="💨" hint="Excessive flatulence or trapped wind" value={s.gas} onChange={(v) => dispatch({ type: 'patch', payload: { gas: v } })} />
 
         {/* Expandable extra symptoms */}
         {!showMore && (
@@ -296,11 +360,11 @@ function SymptomTracker({ date, getSymptomsForDate, setSymptomsForDate }: {
         )}
         {showMore && (
           <>
-            <SymptomSlider label="Diarrhea" emoji="💧" hint="Loose or watery stools" value={diarrhea} onChange={setDiarrhea} />
-            <SymptomSlider label="Constipation" emoji="🧱" hint="Difficulty or infrequent bowel movements" value={constipation} onChange={setConstipation} />
-            <SymptomSlider label="Nausea" emoji="🤢" hint="Feeling sick or queasy" value={nausea} onChange={setNausea} />
-            <SymptomSlider label="Fatigue" emoji="😴" hint="Unusual tiredness or low energy" value={fatigue} onChange={setFatigue} />
-            <SymptomSlider label="Urgency" emoji="🚨" hint="Sudden need to use the bathroom" value={urgency} onChange={setUrgency} />
+            <SymptomSlider label="Diarrhea" emoji="💧" hint="Loose or watery stools" value={s.diarrhea} onChange={(v) => dispatch({ type: 'patch', payload: { diarrhea: v } })} />
+            <SymptomSlider label="Constipation" emoji="🧱" hint="Difficulty or infrequent bowel movements" value={s.constipation} onChange={(v) => dispatch({ type: 'patch', payload: { constipation: v } })} />
+            <SymptomSlider label="Nausea" emoji="🤢" hint="Feeling sick or queasy" value={s.nausea} onChange={(v) => dispatch({ type: 'patch', payload: { nausea: v } })} />
+            <SymptomSlider label="Fatigue" emoji="😴" hint="Unusual tiredness or low energy" value={s.fatigue} onChange={(v) => dispatch({ type: 'patch', payload: { fatigue: v } })} />
+            <SymptomSlider label="Urgency" emoji="🚨" hint="Sudden need to use the bathroom" value={s.urgency} onChange={(v) => dispatch({ type: 'patch', payload: { urgency: v } })} />
           </>
         )}
       </div>
@@ -313,21 +377,15 @@ function SymptomTracker({ date, getSymptomsForDate, setSymptomsForDate }: {
           {([0, 1, 2, 3, 4, 5, 6, 7] as BristolScore[]).slice(1).map((score) => (
             <button
               key={score}
-              onClick={() => setBristol(bristol === score ? 0 : score)}
-              className={`py-2 rounded-lg text-center text-xs font-medium transition-colors ${
-                bristol === score
-                  ? score <= 2 ? 'bg-fodmap-amber/20 text-fodmap-amber ring-2 ring-fodmap-amber/30'
-                  : score <= 5 ? 'bg-fodmap-green/20 text-fodmap-green ring-2 ring-fodmap-green/30'
-                  : 'bg-fodmap-red/20 text-fodmap-red ring-2 ring-fodmap-red/30'
-                  : 'bg-gray-50 text-gray-400'
-              }`}
+              onClick={() => dispatch({ type: 'patch', payload: { bristol: s.bristol === score ? 0 : score } })}
+              className={`py-2 rounded-lg text-center text-xs font-medium transition-colors ${getBristolButtonClass(score, s.bristol === score)}`}
             >
               {score}
             </button>
           ))}
         </div>
-        {bristol > 0 && (
-          <p className="text-xs text-gray-400 mt-1.5">{BRISTOL_LABELS[bristol]}</p>
+        {s.bristol > 0 && (
+          <p className="text-xs text-gray-400 mt-1.5">{BRISTOL_LABELS[s.bristol] ?? 'Unknown'}</p>
         )}
       </div>
 
@@ -335,22 +393,22 @@ function SymptomTracker({ date, getSymptomsForDate, setSymptomsForDate }: {
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
         <h3 className="text-sm font-semibold text-gray-900 mb-3">Lifestyle</h3>
 
-        <SymptomSlider label="Stress" emoji="😰" hint="0 = calm, 5 = very stressed" value={stress} onChange={setStress} />
-        <SymptomSlider label="Sleep quality" emoji="🛏️" hint="0 = not logged, 5 = great sleep" value={sleepQuality} onChange={setSleepQuality} />
+        <SymptomSlider label="Stress" emoji="😰" hint="0 = calm, 5 = very stressed" value={s.stress} onChange={(v) => dispatch({ type: 'patch', payload: { stress: v } })} />
+        <SymptomSlider label="Sleep quality" emoji="🛏️" hint="0 = not logged, 5 = great sleep" value={s.sleepQuality} onChange={(v) => dispatch({ type: 'patch', payload: { sleepQuality: v } })} />
 
         <div className="flex gap-2 mt-1">
           <button
-            onClick={() => setExercise(!exercise)}
+            onClick={() => dispatch({ type: 'patch', payload: { exercise: !s.exercise } })}
             className={`flex-1 py-2 rounded-lg text-xs font-medium transition-colors ${
-              exercise ? 'bg-primary-light ring-2 ring-primary/30 text-primary' : 'bg-gray-50 text-gray-400'
+              s.exercise ? 'bg-primary-light ring-2 ring-primary/30 text-primary' : 'bg-gray-50 text-gray-400'
             }`}
           >
             🏃 Exercise
           </button>
           <button
-            onClick={() => setMenstruation(!menstruation)}
+            onClick={() => dispatch({ type: 'patch', payload: { menstruation: !s.menstruation } })}
             className={`flex-1 py-2 rounded-lg text-xs font-medium transition-colors ${
-              menstruation ? 'bg-fodmap-red/10 ring-2 ring-fodmap-red/20 text-fodmap-red' : 'bg-gray-50 text-gray-400'
+              s.menstruation ? 'bg-fodmap-red/10 ring-2 ring-fodmap-red/20 text-fodmap-red' : 'bg-gray-50 text-gray-400'
             }`}
           >
             🩸 Period
@@ -361,10 +419,11 @@ function SymptomTracker({ date, getSymptomsForDate, setSymptomsForDate }: {
       {/* Notes */}
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
         <textarea
-          value={otherSymptoms}
-          onChange={(e) => setOtherSymptoms(e.target.value)}
+          value={s.otherSymptoms}
+          onChange={(e) => dispatch({ type: 'patch', payload: { otherSymptoms: e.target.value } })}
           placeholder="Additional notes..."
           rows={2}
+          maxLength={500}
           className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary/50"
         />
       </div>
@@ -468,18 +527,16 @@ export default function DiaryScreen({ user }: Props) {
 
   // Handle food deletion with undo
   const handleRemoveFood = (entryId: string, foodIndex: number, foodName: string) => {
-    // Capture the food and entry info before deletion for undo
-    const entry = diary.entries.find(e => e.id === entryId);
-    if (!entry) return;
-    const removedFood = entry.foods[foodIndex];
-    const entryMeal = entry.meal;
-    const entryDate = entry.date;
+    // Capture the full original entry before deletion so undo restores exactly (same ID + timestamp)
+    const originalEntry = diary.entries.find(e => e.id === entryId);
+    if (!originalEntry) return;
+    if (foodIndex >= originalEntry.foods.length) return;
 
     removeFoodFromEntry(entryId, foodIndex);
     setUndoAction({
       message: `Removed "${foodName}"`,
       restore: () => {
-        addEntry(entryDate, entryMeal, [removedFood]);
+        addEntry(originalEntry.date, originalEntry.meal, originalEntry.foods, { id: originalEntry.id, timestamp: originalEntry.timestamp });
       },
     });
   };
@@ -567,11 +624,7 @@ export default function DiaryScreen({ user }: Props) {
                     entry.foods.map((food, fi) => (
                       <div key={`${entry.id}-${fi}`} className="flex items-center justify-between py-1.5">
                         <div className="flex items-center gap-2">
-                          <span className={`w-2 h-2 rounded-full ${
-                            food.rating === 'green' ? 'bg-fodmap-green'
-                            : food.rating === 'amber' ? 'bg-fodmap-amber'
-                            : 'bg-fodmap-red'
-                          }`} />
+                          <span className={`w-2 h-2 rounded-full ${RATING_DOT_CLASS[food.rating]}`} />
                           <span className="text-sm text-gray-700 capitalize">{food.name}</span>
                           {food.portion && (
                             <span className="text-xs text-gray-400">({food.portion})</span>

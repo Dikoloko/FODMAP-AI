@@ -62,4 +62,17 @@ export async function runMigration(): Promise<void> {
       await db.migrations.put({ key: MIGRATION_KEY });
     }
   );
+
+  // Clean up legacy localStorage keys now that data is in IndexedDB
+  for (const key of [
+    'diary_bram_entries',
+    'diary_helena_entries',
+    'diary_bram_symptoms',
+    'diary_helena_symptoms',
+    'fodmap_favorite_recipes',
+    'fodmap_favorite_recipes_bram',
+    'fodmap_favorite_recipes_helena',
+  ]) {
+    localStorage.removeItem(key);
+  }
 }

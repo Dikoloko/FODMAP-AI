@@ -1,104 +1,15 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { logger } from '../utils/logger';
 import type { Html5Qrcode as Html5QrcodeType } from 'html5-qrcode';
-import type { User, FodmapRating, FodmapFood } from '../types';
+import type { User, FodmapRating } from '../types';
 import { useOpenFoodFacts } from '../hooks/useOpenFoodFacts';
 import { useDiary } from '../hooks/useDiary';
-import { analyzeIngredients, searchFoods } from '../utils/fodmapAnalyzer';
+import { analyzeIngredients } from '../utils/fodmapAnalyzer';
+import { toDateString } from '../utils/dateHelpers';
 import IngredientAnalysis from '../components/IngredientAnalysis';
-import FoodCard from '../components/FoodCard';
+import ProductNameFallback from '../components/ProductNameFallback';
 
 type ScanState = 'idle' | 'scanning' | 'result';
-
-function ProductNameFallback({ productName }: { productName: string }) {
-  // Try to find the best match for the product as a whole
-  // First: search the full name, then try progressively shorter terms
-  const name = productName.toLowerCase();
-
-  // Common product name mappings (FR/NL → search term)
-  const productKeywords: Record<string, string> = {
-    'oeuf': 'egg', 'oeufs': 'egg', 'ei': 'egg', 'eieren': 'egg',
-    'lait': 'milk', 'melk': 'milk',
-    'beurre': 'butter', 'boter': 'butter',
-    'fromage': 'cheese', 'kaas': 'cheese',
-    'pain': 'bread', 'brood': 'bread',
-    'poulet': 'chicken', 'kip': 'chicken',
-    'porc': 'pork', 'varken': 'pork',
-    'boeuf': 'beef', 'rund': 'beef',
-    'riz': 'rice', 'rijst': 'rice',
-    'pomme': 'apple', 'appel': 'apple',
-    'banane': 'banana', 'banaan': 'banana',
-    'tomate': 'tomato', 'tomaat': 'tomato',
-    'carotte': 'carrot', 'wortel': 'carrot',
-    'yaourt': 'yogurt', 'yoghurt': 'yogurt',
-    'crème': 'cream', 'room': 'cream',
-    'saumon': 'salmon', 'zalm': 'salmon',
-    'thon': 'tuna', 'tonijn': 'tuna',
-    'pâtes': 'pasta', 'pasta': 'pasta',
-    'chocolat': 'chocolate', 'chocolade': 'chocolate',
-    'miel': 'honey', 'honing': 'honey',
-    'oignon': 'onion', 'ui': 'onion',
-    'ail': 'garlic', 'knoflook': 'garlic',
-    'champignon': 'mushroom', 'paddenstoel': 'mushroom',
-    'avocat': 'avocado', 'avocado': 'avocado',
-  };
-
-  // 1. Try keyword mapping first
-  const words = name.split(/[\s,\-\/()]+/).filter(w => w.length > 1);
-  let bestMatches: FodmapFood[] = [];
-
-  for (const word of words) {
-    const mapped = productKeywords[word];
-    if (mapped) {
-      const results = searchFoods(mapped);
-      if (results.length > 0) {
-        bestMatches = results;
-        break;
-      }
-    }
-  }
-
-  // 2. If no keyword match, try searching each word (longest first, skip short/common words)
-  if (bestMatches.length === 0) {
-    const skipWords = new Set(['de', 'du', 'des', 'la', 'le', 'les', 'au', 'aux', 'en', 'un', 'une', 'van', 'het', 'een', 'met', 'voor', 'sur', 'par', 'sol', 'bio', 'élevées', 'élevés', 'free', 'range', 'poules', 'hens']);
-    const searchableWords = words
-      .filter(w => w.length > 2 && !skipWords.has(w))
-      .sort((a, b) => b.length - a.length);
-
-    for (const word of searchableWords) {
-      const results = searchFoods(word);
-      if (results.length > 0) {
-        bestMatches = results;
-        break;
-      }
-    }
-  }
-
-  // 3. Deduplicate and show best match
-  const unique = [...new Map(bestMatches.map(f => [f.name, f])).values()];
-
-  if (unique.length > 0) {
-    return (
-      <div>
-        <p className="text-xs text-gray-400 mb-2">
-          No ingredient list available. Based on the product name, here's what we found:
-        </p>
-        <div className="flex flex-col gap-2">
-          {unique.slice(0, 2).map((food) => (
-            <FoodCard key={food.name} food={food} />
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="p-4 bg-gray-50 rounded-xl">
-      <p className="text-sm text-gray-500">
-        No ingredient list available for this product. Try taking a photo of the ingredient list instead.
-      </p>
-    </div>
-  );
-}
 
 // Quick log button for scan results
 function LogToDiaryButton({ productName, rating, addEntry }: {
@@ -109,7 +20,7 @@ function LogToDiaryButton({ productName, rating, addEntry }: {
   const [logged, setLogged] = useState(false);
   const [meal, setMeal] = useState<'breakfast' | 'lunch' | 'dinner' | 'snack' | null>(null);
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = toDateString(new Date());
 
   if (logged) {
     return (
@@ -164,6 +75,7 @@ export default function ScanScreen({ user }: Props) {
   const [manualBarcode, setManualBarcode] = useState('');
   const [scannedBarcode, setScannedBarcode] = useState('');
   const [cameraError, setCameraError] = useState<string | null>(null);
+  const [barcodeError, setBarcodeError] = useState<string | null>(null);
   const scannerRef = useRef<Html5QrcodeType | null>(null);
   const scannerContainerId = 'barcode-scanner';
 
@@ -177,8 +89,8 @@ export default function ScanScreen({ user }: Props) {
         if (state === 2) { // SCANNING
           await scannerRef.current.stop();
         }
-      } catch {
-        // ignore stop errors
+      } catch (err) {
+        logger.warn('scan_stop_scanner_failed', { message: err instanceof Error ? err.message : String(err) });
       }
       scannerRef.current = null;
     }
@@ -237,10 +149,10 @@ export default function ScanScreen({ user }: Props) {
         }
       );
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes('Permission') || msg.includes('NotAllowed')) {
+      const errName = err instanceof Error ? err.name : '';
+      if (errName === 'NotAllowedError') {
         setCameraError('Camera permission denied. Please allow camera access and try again.');
-      } else if (msg.includes('NotFound') || msg.includes('device')) {
+      } else if (errName === 'NotFoundError' || errName === 'OverconstrainedError') {
         setCameraError('No camera found. Use manual barcode entry below.');
       } else {
         setCameraError('Could not start camera. Try manual entry instead.');
@@ -257,9 +169,14 @@ export default function ScanScreen({ user }: Props) {
 
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (manualBarcode.trim()) {
-      handleBarcode(manualBarcode.trim());
+    const barcode = manualBarcode.trim();
+    if (!barcode) return;
+    if (!/^\d{8}$|^\d{12,13}$/.test(barcode)) {
+      setBarcodeError('Please enter an 8 or 13-digit barcode number.');
+      return;
     }
+    setBarcodeError(null);
+    handleBarcode(barcode);
   };
 
   const handleScanAgain = () => {
@@ -424,6 +341,9 @@ export default function ScanScreen({ user }: Props) {
             Look up
           </button>
         </div>
+        {barcodeError && (
+          <p className="text-xs text-fodmap-red mt-1.5">{barcodeError}</p>
+        )}
       </form>
 
       {/* File input fallback for camera issues */}

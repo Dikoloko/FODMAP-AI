@@ -4,6 +4,7 @@ import CameraCapture from '../components/CameraCapture';
 import FodmapBadge from '../components/FodmapBadge';
 import { useClaudeAnalysis, type FoodAnalysis } from '../hooks/useClaudeAnalysis';
 import { useDiary } from '../hooks/useDiary';
+import { toDateString } from '../utils/dateHelpers';
 
 interface Props {
   user: User;
@@ -64,14 +65,15 @@ function FoodAnalysisCard({ food, onLog }: { food: FoodAnalysis; onLog: () => vo
 
 export default function PhotoScreen({ user }: Props) {
   const [photoBase64, setPhotoBase64] = useState<string | null>(null);
-  const [photoPreview, setPhotoPreview] = useState<string | null>(null);
   const { loading, result, error, analyzePhoto, reset } = useClaudeAnalysis();
   const { addEntry } = useDiary(user);
   const [mealForLog, setMealForLog] = useState<'breakfast' | 'lunch' | 'dinner' | 'snack'>('lunch');
 
+  // Derived — no duplicate copy of the image bytes in memory
+  const photoPreview = photoBase64 ? `data:image/jpeg;base64,${photoBase64}` : null;
+
   const handleCapture = (base64: string) => {
     setPhotoBase64(base64);
-    setPhotoPreview(`data:image/jpeg;base64,${base64}`);
   };
 
   const handleAnalyze = () => {
@@ -82,12 +84,11 @@ export default function PhotoScreen({ user }: Props) {
 
   const handleReset = () => {
     setPhotoBase64(null);
-    setPhotoPreview(null);
     reset();
   };
 
   const handleLogFood = (food: FoodAnalysis) => {
-    const today = new Date().toISOString().split('T')[0];
+    const today = toDateString(new Date());
     addEntry(today, mealForLog, [{
       name: food.name,
       rating: food.rating,

@@ -5,6 +5,14 @@ import type { FodmapFood, FodmapDatabase, FodmapRating } from '../types';
 let _db: FodmapDatabase | null = null;
 let _dbPromise: Promise<FodmapDatabase> | null = null;
 
+// Fix #9: LRU cache for searchFoods — 50-entry Map keyed on query string
+const _searchCache = new Map<string, FodmapFood[]>();
+const SEARCH_CACHE_MAX = 50;
+
+// Fix #13: pre-allocated Set/Map reused across analyzeIngredients calls
+const _seenIngredients = new Set<string>();
+const _byTypeMap = new Map<string, IngredientFlag>();
+
 function loadDb(): Promise<FodmapDatabase> {
   if (_db) return Promise.resolve(_db);
   if (!_dbPromise) {
@@ -27,19 +35,41 @@ export function ensureDb(): Promise<FodmapDatabase> {
   return loadDb();
 }
 
-export function searchFoods(query: string): FodmapFood[] {
+/** Release the in-memory DB and clear all caches. Useful if memory pressure requires it. */
+export function releaseDb(): void {
+  _db = null;
+  _dbPromise = null;
+  _searchCache.clear();
+}
+
+export function searchFoods(query: string): FodmapFood[] | null {
   const db = getDb();
-  if (!db || !query || query.length < 2) return [];
+  if (!db) return null;
+  if (!query || query.length < 2) return [];
 
   const q = query.toLowerCase().trim();
 
-  return db.foods.filter(
+  const cached = _searchCache.get(q);
+  if (cached) {
+    // Refresh position so this entry is last-evicted (true LRU)
+    _searchCache.delete(q);
+    _searchCache.set(q, cached);
+    return cached;
+  }
+
+  const results = db.foods.filter(
     (food) =>
       food.name.toLowerCase().includes(q) ||
       food.nameNL.toLowerCase().includes(q) ||
       food.nameFR.toLowerCase().includes(q) ||
       food.category.toLowerCase().includes(q)
   );
+
+  if (_searchCache.size >= SEARCH_CACHE_MAX) {
+    _searchCache.delete(_searchCache.keys().next().value!);
+  }
+  _searchCache.set(q, results);
+  return results;
 }
 
 export interface IngredientFlag {
@@ -197,23 +227,40 @@ function segmentIsNegated(segment: string, fodmapType: string): boolean {
   return false;
 }
 
+// Split a normalized ingredient text into individual segments, preserving
+// parenthetical content like "(rijst, maïs)" as a single token.
+function parseIngredientSegments(normalizedText: string): string[] {
+  const preprocessed = normalizedText.replace(/\([^)]*\)/g, m => m.replace(/,/g, '\u00B7'));
+  return preprocessed.split(/,(?!\d)|;/).map(s => s.trim().replace(/\u00B7/g, ','));
+}
+
+// Deduplicate flags by FODMAP type — keep the most specific (longest) match per type.
+// Uses the pre-allocated _byTypeMap to avoid allocating a new Map per call.
+function deduplicateByType(rawFlags: IngredientFlag[]): IngredientFlag[] {
+  _byTypeMap.clear();
+  for (const flag of rawFlags) {
+    const existing = _byTypeMap.get(flag.fodmapType);
+    if (!existing || flag.matched.length > existing.matched.length) {
+      _byTypeMap.set(flag.fodmapType, flag);
+    }
+  }
+  return [..._byTypeMap.values()];
+}
+
 export function analyzeIngredients(ingredientText: string): {
   rating: FodmapRating;
   flags: IngredientFlag[];
 } {
   const text = normalize(ingredientText);
-  const flags: IngredientFlag[] = [];
-  const seen = new Set<string>();
+  // Fix #13: reuse pre-allocated Set — clear rather than reallocate
+  _seenIngredients.clear();
 
-  // Pre-process: replace commas inside parentheses with a placeholder
-  // so "glutenvrij meel (rijst, maïs)" stays as one segment
-  const preprocessed = text.replace(/\([^)]*\)/g, match => match.replace(/,/g, '\u00B7'));
-
-  // Split by comma (but not decimal commas like "1,8%") or semicolon
-  const segments = preprocessed.split(/,(?!\d)|;/).map(s => s.trim().replace(/\u00B7/g, ','));
-
+  const segments = parseIngredientSegments(text);
   const db = getDb();
   if (!db) return { rating: 'green' as const, flags: [] };
+
+  const rawFlags: IngredientFlag[] = [];
+  const wordBoundary = /[\s,;:()/\-.*]|^$/;
 
   for (const item of db.highFodmapIngredients) {
     const pattern = normalize(item.ingredient);
@@ -226,17 +273,18 @@ export function analyzeIngredients(ingredientText: string): {
     // Check if this segment negates the FODMAP type (e.g. "lactosevrije magere kwark")
     if (segmentIsNegated(segment, item.fodmapType)) continue;
 
-    // Verify word boundary (prevent "lait" matching in "laitue")
+    // Verify word boundaries on both sides (prevent "lait" matching in "laitue")
     const idx = segment.indexOf(pattern);
     const before = idx > 0 ? segment[idx - 1] : ' ';
-    const wordBoundary = /[\s,;:()\/\-.*]|^$/;
-    if (!wordBoundary.test(before)) continue;
+    const afterIdx = idx + pattern.length;
+    const after = afterIdx < segment.length ? segment[afterIdx] : ' ';
+    if (!wordBoundary.test(before) || !wordBoundary.test(after)) continue;
 
     // Skip duplicate ingredient names (language variants)
-    if (seen.has(item.ingredient.toLowerCase())) continue;
-    seen.add(item.ingredient.toLowerCase());
+    if (_seenIngredients.has(item.ingredient.toLowerCase())) continue;
+    _seenIngredients.add(item.ingredient.toLowerCase());
 
-    flags.push({
+    rawFlags.push({
       ingredient: item.ingredient,
       matched: pattern,
       fodmapType: item.fodmapType,
@@ -245,19 +293,11 @@ export function analyzeIngredients(ingredientText: string): {
     });
   }
 
-  // Deduplicate flags by FODMAP type — keep most specific match per type
-  const byType = new Map<string, IngredientFlag>();
-  for (const flag of flags) {
-    const existing = byType.get(flag.fodmapType);
-    if (!existing || flag.matched.length > existing.matched.length) {
-      byType.set(flag.fodmapType, flag);
-    }
-  }
-  const dedupedFlags = [...byType.values()];
+  const flags = deduplicateByType(rawFlags);
 
-  if (dedupedFlags.length === 0) return { rating: 'green', flags: [] };
-  if (dedupedFlags.length <= 2) return { rating: 'amber', flags: dedupedFlags };
-  return { rating: 'red', flags: dedupedFlags };
+  if (flags.length === 0) return { rating: 'green', flags: [] };
+  if (flags.length <= 2) return { rating: 'amber', flags };
+  return { rating: 'red', flags };
 }
 
 export function getFoodByName(name: string): FodmapFood | undefined {

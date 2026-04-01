@@ -1,4 +1,4 @@
-import { useMemo, useState, useCallback } from 'react';
+import { useMemo } from 'react';
 import type { User } from '../types';
 import { useDiary } from '../hooks/useDiary';
 import {
@@ -7,272 +7,12 @@ import {
   getSafeFoods,
   getWeeklyTrends,
   getLifestyleCorrelations,
-  type FoodCorrelation,
-  type WeekTrend,
-  type LifestyleCorrelation,
 } from '../utils/insightEngine';
+import { TriggerFoodCard, SafeFoodCard, TrendBar, LifestyleInsight } from '../components/insights/InsightCards';
+import AIInsightsSection from '../components/insights/AIInsightsSection';
 
 interface Props {
   user: User;
-}
-
-function TriggerFoodCard({ c }: { c: FoodCorrelation }) {
-  return (
-    <div className="flex items-center justify-between py-2">
-      <div className="flex items-center gap-2.5">
-        <span className="w-2.5 h-2.5 rounded-full bg-fodmap-red shrink-0" />
-        <div>
-          <span className="text-sm text-gray-900 capitalize font-medium">{c.food}</span>
-          <p className="text-xs text-gray-400">
-            Eaten {c.timesEaten}x · Bad {Math.round(c.badRate * 100)}% of the time
-          </p>
-        </div>
-      </div>
-      <div className="text-right">
-        <span className="text-xs font-semibold text-fodmap-red">
-          {Math.round(c.avgSymptomScore * 100)}%
-        </span>
-        <p className="text-[10px] text-gray-400">severity</p>
-      </div>
-    </div>
-  );
-}
-
-function SafeFoodCard({ c }: { c: FoodCorrelation }) {
-  return (
-    <div className="flex items-center justify-between py-2">
-      <div className="flex items-center gap-2.5">
-        <span className="w-2.5 h-2.5 rounded-full bg-fodmap-green shrink-0" />
-        <div>
-          <span className="text-sm text-gray-900 capitalize font-medium">{c.food}</span>
-          <p className="text-xs text-gray-400">
-            Eaten {c.timesEaten}x · Good {Math.round(c.goodRate * 100)}% of the time
-          </p>
-        </div>
-      </div>
-      <span className="text-xs font-semibold text-fodmap-green">
-        Safe
-      </span>
-    </div>
-  );
-}
-
-function TrendBar({ trend, maxScore }: { trend: WeekTrend; maxScore: number }) {
-  const height = maxScore > 0 ? (trend.avgScore / maxScore) * 100 : 0;
-  const color = trend.avgScore > 0.3 ? 'bg-fodmap-red' : trend.avgScore > 0.15 ? 'bg-fodmap-amber' : 'bg-fodmap-green';
-
-  return (
-    <div className="flex flex-col items-center gap-1 flex-1">
-      <div className="w-full h-24 bg-gray-50 rounded-lg relative overflow-hidden flex items-end">
-        {trend.daysLogged > 0 ? (
-          <div
-            className={`w-full ${color} rounded-lg transition-all duration-300`}
-            style={{ height: `${Math.max(height, 8)}%` }}
-          />
-        ) : (
-          <div className="w-full h-full flex items-center justify-center">
-            <span className="text-[10px] text-gray-300">—</span>
-          </div>
-        )}
-      </div>
-      <span className="text-[10px] text-gray-400 text-center leading-tight">{trend.weekLabel}</span>
-      {trend.daysLogged > 0 && (
-        <div className="flex gap-1">
-          {trend.goodDays > 0 && <span className="text-[10px] text-fodmap-green">{trend.goodDays}😊</span>}
-          {trend.badDays > 0 && <span className="text-[10px] text-fodmap-red">{trend.badDays}😣</span>}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function LifestyleInsight({ lc }: { lc: LifestyleCorrelation }) {
-  const isWorse = lc.difference > 0.05;
-  const isBetter = lc.difference < -0.05;
-
-  return (
-    <div className="flex items-center justify-between py-2">
-      <div className="flex items-center gap-2">
-        <span className="text-lg">{lc.emoji}</span>
-        <div>
-          <span className="text-sm text-gray-900 font-medium">{lc.factor}</span>
-          <p className="text-xs text-gray-400">{lc.daysPresent} days logged</p>
-        </div>
-      </div>
-      <span className={`text-xs font-semibold ${
-        isWorse ? 'text-fodmap-red' : isBetter ? 'text-fodmap-green' : 'text-gray-400'
-      }`}>
-        {isWorse ? `+${Math.round(lc.difference * 100)}% worse`
-          : isBetter ? `${Math.round(lc.difference * 100)}% better`
-          : 'No clear effect'}
-      </span>
-    </div>
-  );
-}
-
-interface AIPattern {
-  type: 'trigger' | 'combination' | 'timing' | 'lifestyle' | 'positive';
-  title: string;
-  description: string;
-  confidence: 'high' | 'medium' | 'low';
-  actionable: string;
-}
-
-interface AIInsights {
-  summary: string;
-  patterns: AIPattern[];
-  encouragement: string;
-  eliminationSuggestion: string | null;
-}
-
-const patternEmoji: Record<string, string> = {
-  trigger: '🚩',
-  combination: '🔀',
-  timing: '⏰',
-  lifestyle: '🧘',
-  positive: '✅',
-};
-
-const confidenceLabel: Record<string, string> = {
-  high: 'High confidence',
-  medium: 'Medium confidence',
-  low: 'Low confidence — need more data',
-};
-
-function AIInsightsSection({ entries, symptoms }: { entries: unknown[]; symptoms: unknown[] }) {
-  const [insights, setInsights] = useState<AIInsights | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [lastAnalyzed, setLastAnalyzed] = useState<string | null>(null);
-
-  const analyze = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch('/api/insights', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ entries, symptoms }),
-      });
-
-      if (!res.ok) {
-        throw new Error(`Analysis failed (${res.status})`);
-      }
-
-      const data = await res.json();
-      // Extract JSON from Claude's response
-      const text = data.content?.[0]?.text || '';
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) throw new Error('Could not parse AI response');
-
-      const parsed: AIInsights = JSON.parse(jsonMatch[0]);
-      setInsights(parsed);
-      setLastAnalyzed(new Date().toLocaleString('nl-BE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Something went wrong');
-    } finally {
-      setLoading(false);
-    }
-  }, [entries, symptoms]);
-
-  return (
-    <div className="bg-gradient-to-br from-purple-50 to-indigo-50 rounded-xl border border-purple-100 shadow-sm p-4">
-      <div className="flex items-center justify-between mb-1">
-        <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-1.5">
-          <span className="text-base">🤖</span> AI Analysis
-        </h3>
-        {lastAnalyzed && (
-          <span className="text-[10px] text-gray-400">{lastAnalyzed}</span>
-        )}
-      </div>
-      <p className="text-xs text-gray-400 mb-3">
-        Sends your diary data to Claude for deeper pattern analysis
-      </p>
-
-      {!insights && !loading && (
-        <button
-          onClick={analyze}
-          className="w-full py-2.5 bg-purple-600 text-white text-sm font-medium rounded-lg hover:bg-purple-700 active:scale-[0.98] transition-all"
-        >
-          ✨ Analyze my data with AI
-        </button>
-      )}
-
-      {loading && (
-        <div className="flex items-center justify-center py-6 gap-2">
-          <div className="w-5 h-5 border-2 border-purple-400 border-t-transparent rounded-full animate-spin" />
-          <span className="text-sm text-purple-600">Analyzing your patterns...</span>
-        </div>
-      )}
-
-      {error && (
-        <div className="text-center py-3">
-          <p className="text-sm text-red-500 mb-2">{error}</p>
-          <button
-            onClick={analyze}
-            className="text-sm text-purple-600 underline"
-          >
-            Try again
-          </button>
-        </div>
-      )}
-
-      {insights && (
-        <div className="flex flex-col gap-3">
-          {/* Summary */}
-          <p className="text-sm text-gray-700 bg-white/60 rounded-lg p-3">
-            {insights.summary}
-          </p>
-
-          {/* Patterns */}
-          {insights.patterns.map((p, i) => (
-            <div key={i} className="bg-white/60 rounded-lg p-3">
-              <div className="flex items-start gap-2 mb-1">
-                <span className="text-base shrink-0">{patternEmoji[p.type] || '📌'}</span>
-                <div className="flex-1">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium text-gray-900">{p.title}</span>
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
-                      p.confidence === 'high' ? 'bg-green-100 text-green-700'
-                        : p.confidence === 'medium' ? 'bg-amber-100 text-amber-700'
-                        : 'bg-gray-100 text-gray-500'
-                    }`}>
-                      {confidenceLabel[p.confidence]}
-                    </span>
-                  </div>
-                  <p className="text-xs text-gray-600 mt-1">{p.description}</p>
-                  <p className="text-xs text-purple-700 mt-1.5 font-medium">
-                    💡 {p.actionable}
-                  </p>
-                </div>
-              </div>
-            </div>
-          ))}
-
-          {/* Elimination suggestion */}
-          {insights.eliminationSuggestion && (
-            <div className="bg-amber-50 rounded-lg p-3 border border-amber-100">
-              <p className="text-xs font-semibold text-amber-800 mb-1">🧪 Elimination suggestion</p>
-              <p className="text-xs text-amber-700">{insights.eliminationSuggestion}</p>
-            </div>
-          )}
-
-          {/* Encouragement */}
-          <p className="text-xs text-purple-600 text-center italic">
-            {insights.encouragement}
-          </p>
-
-          {/* Re-analyze button */}
-          <button
-            onClick={analyze}
-            className="text-xs text-purple-500 hover:text-purple-700 underline self-center"
-          >
-            Re-analyze with latest data
-          </button>
-        </div>
-      )}
-    </div>
-  );
 }
 
 function MinDataMessage() {
@@ -302,16 +42,27 @@ function MinDataMessage() {
 }
 
 export default function InsightsScreen({ user }: Props) {
-  const { entries, symptoms } = useDiary(user);
+  const { entries, symptoms } = useDiary(user, { allTime: true });
 
-  const correlations = useMemo(() => computeCorrelations(entries, symptoms), [entries, symptoms]);
-  const triggerFoods = useMemo(() => getTriggerFoods(correlations), [correlations]);
-  const safeFoods = useMemo(() => getSafeFoods(correlations), [correlations]);
-  const weeklyTrends = useMemo(() => getWeeklyTrends(symptoms, 4), [symptoms]);
-  const lifestyleCorrelations = useMemo(() => getLifestyleCorrelations(symptoms), [symptoms]);
+  // Fix #6 + #11: batch all derived computations into one useMemo — a single diary change
+  // triggers one recompute instead of cascading through five separate useMemos.
+  // maxTrendScore is folded in here too to avoid a standalone Math.max on every render.
+  const {
+    correlations, triggerFoods, safeFoods, weeklyTrends, lifestyleCorrelations, maxTrendScore,
+  } = useMemo(() => {
+    const correlations = computeCorrelations(entries, symptoms, user);
+    const weeklyTrends = getWeeklyTrends(symptoms, 4);
+    return {
+      correlations,
+      triggerFoods: getTriggerFoods(correlations),
+      safeFoods: getSafeFoods(correlations),
+      weeklyTrends,
+      lifestyleCorrelations: getLifestyleCorrelations(symptoms),
+      maxTrendScore: Math.max(...weeklyTrends.map(t => t.avgScore), 0.1),
+    };
+  }, [entries, symptoms, user]);
 
   const hasEnoughData = entries.length >= 5 && symptoms.length >= 3;
-  const maxTrendScore = Math.max(...weeklyTrends.map(t => t.avgScore), 0.1);
 
   return (
     <div className="flex-1 px-4 pt-4 pb-24">
@@ -341,7 +92,7 @@ export default function InsightsScreen({ user }: Props) {
           </div>
 
           {/* AI-powered analysis */}
-          <AIInsightsSection entries={entries} symptoms={symptoms} />
+          <AIInsightsSection entries={entries} symptoms={symptoms} user={user} />
 
           {/* Trigger foods */}
           <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">

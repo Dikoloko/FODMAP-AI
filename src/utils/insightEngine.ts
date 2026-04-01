@@ -1,8 +1,19 @@
 import type { DiaryEntry, DaySymptoms } from '../types';
+import { toDateString, getNextDate } from './dateHelpers';
+
+// Fix #5 / #10: cache computeCorrelations result — invalidate on user switch or content change.
+// Key includes all entry IDs and symptom dates to catch mid-history edits, not just length changes.
+let _corrCache: { key: string; result: FoodCorrelation[] } | null = null;
+
+function corrCacheKey(user: string, entries: DiaryEntry[], symptoms: DaySymptoms[]): string {
+  const entryHash = entries.map(e => e.id).join(',');
+  const symHash = symptoms.map(s => s.date).join(',');
+  return `${user}|${entryHash}|${symHash}`;
+}
 
 // Compute a single "symptom severity" score (0-1) from a DaySymptoms record
 export function symptomScore(s: DaySymptoms): number {
-  const symptoms = [s.bloating, s.pain, s.gas, s.diarrhea, s.constipation, s.nausea, s.fatigue, s.urgency];
+  const symptoms = [s.bloating ?? 0, s.pain ?? 0, s.gas ?? 0, s.diarrhea ?? 0, s.constipation ?? 0, s.nausea ?? 0, s.fatigue ?? 0, s.urgency ?? 0];
   const total = symptoms.reduce((a, b) => a + b, 0);
   // Max possible = 8 * 5 = 40
   return total / 40;
@@ -32,7 +43,13 @@ export interface FoodCorrelation {
 export function computeCorrelations(
   entries: DiaryEntry[],
   symptoms: DaySymptoms[],
+  user = 'bram',
 ): FoodCorrelation[] {
+  const key = corrCacheKey(user, entries, symptoms);
+  if (_corrCache && _corrCache.key === key) {
+    return _corrCache.result;
+  }
+
   const symptomMap = new Map(symptoms.map(s => [s.date, s]));
 
   // Collect all unique foods
@@ -92,14 +109,10 @@ export function computeCorrelations(
     });
   }
 
+  _corrCache = { key, result: correlations };
   return correlations;
 }
 
-function getNextDate(date: string): string {
-  const d = new Date(date + 'T00:00:00');
-  d.setDate(d.getDate() + 1);
-  return d.toISOString().split('T')[0];
-}
 
 // Get suspected trigger foods (high bad rate)
 export function getTriggerFoods(correlations: FoodCorrelation[]): FoodCorrelation[] {
@@ -136,8 +149,8 @@ export function getWeeklyTrends(symptoms: DaySymptoms[], numWeeks = 4): WeekTren
     const weekStart = new Date(weekEnd);
     weekStart.setDate(weekStart.getDate() - 6);
 
-    const startStr = weekStart.toISOString().split('T')[0];
-    const endStr = weekEnd.toISOString().split('T')[0];
+    const startStr = toDateString(weekStart);
+    const endStr = toDateString(weekEnd);
 
     const weekSymptoms = symptoms.filter(s => s.date >= startStr && s.date <= endStr);
 

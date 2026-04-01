@@ -1,3 +1,6 @@
+import { callAnthropic } from './_anthropic';
+import { logger } from './_logger';
+
 export const config = { runtime: 'edge' };
 
 const SYSTEM_PROMPT = `You are a FODMAP dietitian AI analyzing a patient's food diary and symptom data.
@@ -33,62 +36,87 @@ Respond in JSON format:
 }`;
 
 export default async function handler(req: Request) {
+  const requestId = crypto.randomUUID();
+
   if (req.method !== 'POST') {
     return new Response(JSON.stringify({ error: 'Method not allowed' }), {
       status: 405,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Request-Id': requestId },
     });
   }
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
+    logger.error('insights_no_api_key', { requestId });
     return new Response(JSON.stringify({ error: 'API key not configured' }), {
       status: 500,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Request-Id': requestId },
     });
   }
 
   try {
-    const { entries, symptoms } = await req.json();
+    const body = await req.json();
+    const { entries, symptoms } = body;
+
+    if (!Array.isArray(entries) || !Array.isArray(symptoms)) {
+      logger.warn('insights_bad_request', { requestId, reason: 'entries or symptoms not arrays' });
+      return new Response(JSON.stringify({ error: 'Invalid request: entries and symptoms must be arrays' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json', 'X-Request-Id': requestId },
+      });
+    }
 
     // Build a readable summary of the diary data for Claude
     const prompt = buildDiaryPrompt(entries, symptoms);
 
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 2000,
-        system: SYSTEM_PROMPT,
-        messages: [
-          {
-            role: 'user',
-            content: prompt,
-          },
-        ],
-      }),
+    if (prompt.length > 100_000) {
+      logger.warn('insights_payload_too_large', { requestId, promptLength: prompt.length });
+      return new Response(JSON.stringify({ error: 'Payload too large. Please reduce the date range.' }), {
+        status: 413,
+        headers: { 'Content-Type': 'application/json', 'X-Request-Id': requestId },
+      });
+    }
+
+    logger.debug('insights_request', {
+      requestId,
+      entryCount: entries.length,
+      symptomCount: symptoms.length,
+      promptChars: prompt.length,
     });
 
-    if (!response.ok) {
-      return new Response(
-        JSON.stringify({ error: `Analysis failed (${response.status})` }),
-        { status: response.status, headers: { 'Content-Type': 'application/json' } }
-      );
+    let response: Response;
+    try {
+      response = await callAnthropic({
+        apiKey,
+        requestId,
+        body: {
+          max_tokens: 2000,
+          system: SYSTEM_PROMPT,
+          messages: [{ role: 'user', content: prompt }],
+        },
+      });
+    } catch (apiErr: unknown) {
+      const e = apiErr as { status?: number; message?: string };
+      logger.error('insights_api_error', { requestId, status: e.status, message: e.message });
+      return new Response(JSON.stringify({ error: e.message ?? 'Analysis failed' }), {
+        status: e.status ?? 500,
+        headers: { 'Content-Type': 'application/json', 'X-Request-Id': requestId },
+      });
     }
 
     const data = await response.json();
     return new Response(JSON.stringify(data), {
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Request-Id': requestId },
     });
   } catch (err) {
+    logger.error('insights_unhandled', {
+      requestId,
+      message: err instanceof Error ? err.message : String(err),
+      stack: err instanceof Error ? err.stack : undefined,
+    });
     return new Response(
-      JSON.stringify({ error: 'Internal server error' }),
-      { status: 500, headers: { 'Content-Type': 'application/json' } }
+      JSON.stringify({ error: process.env.NODE_ENV === 'development' && err instanceof Error ? err.message : 'Internal server error' }),
+      { status: 500, headers: { 'Content-Type': 'application/json', 'X-Request-Id': requestId } }
     );
   }
 }
