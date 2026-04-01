@@ -76,13 +76,28 @@ export default function ScanScreen({ user }: Props) {
   const [scannedBarcode, setScannedBarcode] = useState('');
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [barcodeError, setBarcodeError] = useState<string | null>(null);
+  const [torchSupported, setTorchSupported] = useState(false);
+  const [torchOn, setTorchOn] = useState(false);
   const scannerRef = useRef<Html5QrcodeType | null>(null);
+  const videoTrackRef = useRef<MediaStreamTrack | null>(null);
+  const torchOnRef = useRef(false);
   const scannerContainerId = 'barcode-scanner';
 
   const { loading, product, error, notFound, lookup, reset } = useOpenFoodFacts();
   const { addEntry } = useDiary(user);
 
   const stopScanner = useCallback(async () => {
+    // Turn off torch before stopping
+    if (videoTrackRef.current && torchOnRef.current) {
+      try {
+        await videoTrackRef.current.applyConstraints({ advanced: [{ torch: false } as MediaTrackConstraintSet] });
+      } catch { /* ignore */ }
+      torchOnRef.current = false;
+      setTorchOn(false);
+    }
+    videoTrackRef.current = null;
+    setTorchSupported(false);
+
     if (scannerRef.current) {
       try {
         const state = scannerRef.current.getState();
@@ -102,6 +117,19 @@ export default function ScanScreen({ user }: Props) {
     setScanState('result');
     lookup(barcode);
   }, [stopScanner, lookup]);
+
+  const toggleTorch = useCallback(async () => {
+    const track = videoTrackRef.current;
+    if (!track) return;
+    const newState = !torchOnRef.current;
+    try {
+      await track.applyConstraints({ advanced: [{ torch: newState } as MediaTrackConstraintSet] });
+      torchOnRef.current = newState;
+      setTorchOn(newState);
+    } catch (err) {
+      logger.warn('torch_toggle_failed', { message: err instanceof Error ? err.message : String(err) });
+    }
+  }, []);
 
   const startScanner = useCallback(async () => {
     setCameraError(null);
@@ -128,15 +156,23 @@ export default function ScanScreen({ user }: Props) {
       });
       scannerRef.current = scanner;
 
-      // Use full viewport width for scan area
+      // Use most of the viewport width for scan area — larger box helps small screens
       const containerWidth = Math.min(window.innerWidth - 32, 500);
-      const scanWidth = Math.round(containerWidth * 0.85);
-      const scanHeight = Math.round(scanWidth * 0.4);
+      const scanWidth = Math.round(containerWidth * 0.92);
+      const scanHeight = Math.round(scanWidth * 0.5);
 
       await scanner.start(
-        { facingMode: 'environment' },
         {
-          fps: 15,
+          facingMode: 'environment',
+          // Prefer 720p — ideal means "accept lower on older cameras"
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          // Autofocus hint: continuous mode helps older cameras lock on barcodes faster
+          // (in advanced so unsupported browsers silently ignore it)
+          advanced: [{ focusMode: 'continuous' } as MediaTrackConstraintSet],
+        },
+        {
+          fps: 10, // Lower fps reduces CPU load on older phones
           qrbox: { width: scanWidth, height: scanHeight },
           aspectRatio: 1.5,
           disableFlip: false,
@@ -148,12 +184,29 @@ export default function ScanScreen({ user }: Props) {
           // ignore scan failures (no barcode in frame)
         }
       );
+
+      // Probe for torch support after camera stream is live
+      setTimeout(() => {
+        const videoEl = document.querySelector(`#${scannerContainerId} video`) as HTMLVideoElement | null;
+        const track = (videoEl?.srcObject as MediaStream | null)?.getVideoTracks?.()[0];
+        if (track) {
+          videoTrackRef.current = track;
+          const capabilities = track.getCapabilities?.() as (MediaTrackCapabilities & { torch?: boolean }) | undefined;
+          if (capabilities?.torch) {
+            setTorchSupported(true);
+          }
+        }
+      }, 600);
+
     } catch (err) {
       const errName = err instanceof Error ? err.name : '';
       if (errName === 'NotAllowedError') {
         setCameraError('Camera permission denied. Please allow camera access and try again.');
-      } else if (errName === 'NotFoundError' || errName === 'OverconstrainedError') {
+      } else if (errName === 'NotFoundError') {
         setCameraError('No camera found. Use manual barcode entry below.');
+      } else if (errName === 'OverconstrainedError') {
+        // Retry without advanced constraints (autofocus hint not supported)
+        setCameraError('Could not start camera. Try manual entry instead.');
       } else {
         setCameraError('Could not start camera. Try manual entry instead.');
       }
@@ -225,12 +278,27 @@ export default function ScanScreen({ user }: Props) {
         <div className="mb-4">
           <div id={scannerContainerId} className="rounded-xl overflow-hidden mb-3" style={{ minHeight: '280px' }} />
           <p className="text-xs text-gray-400 text-center mb-2">Hold steady — keep barcode inside the box</p>
-          <button
-            onClick={async () => { await stopScanner(); setScanState('idle'); }}
-            className="w-full py-2.5 text-sm text-gray-600 bg-gray-100 rounded-xl"
-          >
-            Cancel scan
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={async () => { await stopScanner(); setScanState('idle'); }}
+              className="flex-1 py-2.5 text-sm text-gray-600 bg-gray-100 rounded-xl"
+            >
+              Cancel scan
+            </button>
+            {torchSupported && (
+              <button
+                onClick={toggleTorch}
+                aria-label={torchOn ? 'Turn off flashlight' : 'Turn on flashlight'}
+                className={`px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${
+                  torchOn
+                    ? 'bg-yellow-400 text-yellow-900'
+                    : 'bg-gray-100 text-gray-600'
+                }`}
+              >
+                {torchOn ? '🔦 On' : '🔦 Off'}
+              </button>
+            )}
+          </div>
         </div>
       )}
 
@@ -331,7 +399,7 @@ export default function ScanScreen({ user }: Props) {
             value={manualBarcode}
             onChange={(e) => setManualBarcode(e.target.value)}
             placeholder="Enter barcode number..."
-            className="flex-1 px-4 py-3 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+            className="flex-1 px-4 py-3 rounded-xl border border-gray-200 text-base focus:outline-none focus:ring-2 focus:ring-primary/50"
           />
           <button
             type="submit"

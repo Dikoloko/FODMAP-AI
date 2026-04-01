@@ -71,7 +71,7 @@ export default function HomeScreen({ user, onSwitchUser }: Props) {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search any food (EN, NL, or FR)..."
-          className="w-full pl-10 pr-4 py-3 rounded-xl border border-gray-200 bg-white text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
+          className="w-full pl-10 pr-4 py-3 rounded-xl border border-gray-200 bg-white text-base focus:outline-none focus:ring-2 focus:ring-primary/50 focus:border-primary"
         />
         {query && (
           <button

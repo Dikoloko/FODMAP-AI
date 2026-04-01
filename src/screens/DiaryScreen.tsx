@@ -120,7 +120,7 @@ function AddFoodForm({ onAdd, onCancel }: { onAdd: (food: DiaryFood) => void; on
         onChange={(e) => { setInputValue(e.target.value); setCustomName(e.target.value); }}
         placeholder="Search food or type name..."
         autoFocus
-        className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50 mb-2"
+        className="w-full px-3 py-2.5 rounded-lg border border-gray-200 text-base focus:outline-none focus:ring-2 focus:ring-primary/50 mb-2"
       />
 
       {/* Search results */}
@@ -424,7 +424,7 @@ function SymptomTracker({ date, getSymptomsForDate, setSymptomsForDate }: {
           placeholder="Additional notes..."
           rows={2}
           maxLength={500}
-          className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-primary/50"
+          className="w-full px-3 py-2 rounded-lg border border-gray-200 text-base resize-none focus:outline-none focus:ring-2 focus:ring-primary/50"
         />
       </div>
     </div>

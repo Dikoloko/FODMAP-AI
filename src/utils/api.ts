@@ -28,7 +28,7 @@ export async function lookupBarcode(barcode: string): Promise<OpenFoodFactsProdu
   // Request only fields we need — dramatically reduces response size and latency
   const fields = 'product_name,brands,image_front_small_url,ingredients_text,ingredients_text_nl,ingredients_text_fr';
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 8000);
+  const timeout = setTimeout(() => controller.abort(), 15000);
   const t0 = Date.now();
 
   let response: Response;

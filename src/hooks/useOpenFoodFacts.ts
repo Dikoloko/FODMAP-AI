@@ -30,13 +30,17 @@ export function useOpenFoodFacts() {
       }
     } catch (err) {
       logger.error('off_lookup_failed', { message: err instanceof Error ? err.message : String(err) });
-      const isTimeout = err instanceof Error && err.name === 'AbortError';
-      const isNetworkError = err instanceof TypeError;
-      const message = isTimeout
+      // DOMException (AbortError from AbortController) does not extend Error in all browsers,
+      // so check .name directly rather than relying on instanceof Error.
+      const isAbort = err != null && typeof err === 'object' && (err as { name?: string }).name === 'AbortError';
+      // TypeError means a network-level failure (DNS, connection refused, CORS block, etc.)
+      // but only when it's not an abort — some browsers (e.g. Safari) throw TypeError for aborts too.
+      const isNetworkError = !isAbort && err instanceof TypeError;
+      const message = isAbort
         ? 'Request timed out — please try again'
         : isNetworkError
-        ? 'No internet connection'
-        : 'Failed to look up product. Check your connection.';
+        ? 'Could not reach product database — check your connection'
+        : 'Failed to look up product. Try again.';
       setState({ loading: false, product: null, error: message, notFound: false });
     }
   }, []);
