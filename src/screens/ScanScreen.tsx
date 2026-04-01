@@ -156,16 +156,14 @@ export default function ScanScreen({ user }: Props) {
       });
       scannerRef.current = scanner;
 
-      // Use most of the viewport width for scan area — larger box helps small screens
-      const containerWidth = Math.min(window.innerWidth - 32, 500);
-      const scanWidth = Math.round(containerWidth * 0.92);
-      const scanHeight = Math.round(scanWidth * 0.5);
-
+      // Use a conservative fixed qrbox — dynamic sizing can exceed the rendered
+      // video height on small screens and cause html5-qrcode to throw internally.
+      // aspectRatio is intentionally omitted: html5-qrcode passes it as a *required*
+      // getUserMedia constraint (not ideal), which causes OverconstrainedError on
+      // many phones and kills both start attempts.
       const scanConfig = {
-        fps: 10, // Lower fps reduces CPU load on older phones
-        qrbox: { width: scanWidth, height: scanHeight },
-        aspectRatio: 1.5,
-        disableFlip: false,
+        fps: 10,
+        qrbox: { width: 250, height: 150 },
       };
       const onSuccess = (decodedText: string) => { handleBarcode(decodedText); };
       const onFailure = () => { /* ignore — no barcode in frame */ };
@@ -175,7 +173,6 @@ export default function ScanScreen({ user }: Props) {
         await scanner.start(
           {
             facingMode: 'environment',
-            // ideal means "use if available, don't fail if not"
             width: { ideal: 1280 },
             height: { ideal: 720 },
           },
@@ -183,13 +180,14 @@ export default function ScanScreen({ user }: Props) {
           onSuccess,
           onFailure,
         );
+        logger.log('scan_start_preferred_succeeded', {});
       } catch (constraintErr) {
-        logger.warn('scan_start_preferred_failed', {
-          name: constraintErr instanceof Error ? constraintErr.name : 'unknown',
-          message: constraintErr instanceof Error ? constraintErr.message : String(constraintErr),
-        });
+        const cName = constraintErr instanceof Error ? constraintErr.name : 'unknown';
+        const cMsg = constraintErr instanceof Error ? constraintErr.message : String(constraintErr);
+        logger.warn('scan_start_preferred_failed', { name: cName, message: cMsg });
         // Retry with the absolute minimum — just ask for the back camera
         await scanner.start({ facingMode: 'environment' }, scanConfig, onSuccess, onFailure);
+        logger.log('scan_start_fallback_succeeded', {});
       }
 
       // Probe for torch support after camera stream is live
@@ -206,7 +204,7 @@ export default function ScanScreen({ user }: Props) {
       }, 600);
 
     } catch (err) {
-      const errName = err instanceof Error ? err.name : '';
+      const errName = err instanceof Error ? err.name : 'UnknownError';
       const errMsg = err instanceof Error ? err.message : String(err);
       logger.warn('scan_start_failed', { name: errName, message: errMsg });
 
@@ -215,7 +213,8 @@ export default function ScanScreen({ user }: Props) {
       } else if (errName === 'NotFoundError') {
         setCameraError('No camera found. Use manual barcode entry below.');
       } else {
-        setCameraError('Could not start camera. Try manual entry instead.');
+        // Include error name so it shows up in bug reports
+        setCameraError(`Could not start camera (${errName}). Try manual entry instead.`);
       }
       setScanState('idle');
     }
